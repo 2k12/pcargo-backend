@@ -28,11 +28,18 @@ export class InMemoryClienteRepository implements ClienteRepository {
   }
 
   async crear(cliente: Cliente): Promise<void> {
-    this.datos.set(cliente.id, { ...cliente });
+    this.datos.set(cliente.id, { ...cliente, consentimientoEn: cliente.consentimientoEn ?? null });
   }
 
   async actualizar(id: string, d: Required<DatosCliente>): Promise<Cliente> {
     const c = { ...this.datos.get(id)!, ...d };
+    this.datos.set(id, c);
+    return { ...c };
+  }
+
+  async registrarConsentimiento(id: string, fecha: Date): Promise<Cliente> {
+    const actual = this.datos.get(id)!;
+    const c = { ...actual, consentimientoEn: actual.consentimientoEn ?? new Date(fecha) };
     this.datos.set(id, c);
     return { ...c };
   }

@@ -1,13 +1,14 @@
 import request from "supertest";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Express } from "express";
-import { adaptadoresEnMemoria, crearCasosDeUso } from "../../../src/infrastructure/container.js";
+import { adaptadoresEnMemoria, crearCasosDeUso, type Adaptadores } from "../../../src/infrastructure/container.js";
 import { crearApp } from "../../../src/infrastructure/http/app.js";
 import { item, JWT_SECRET_TEST, solicitudEnvio } from "../../helpers/fakes.js";
 
 // Pila HTTP completa (express + casos de uso + bcrypt/JWT reales) sobre adaptadores en memoria.
 
 let app: Express;
+let adaptadores: Adaptadores;
 let tokenAdmin: string;
 let tokenOperador: string;
 
@@ -15,7 +16,8 @@ const login = async (email: string, password: string) =>
   (await request(app).post("/api/auth/login").send({ email, password })).body.token as string;
 
 beforeAll(async () => {
-  app = crearApp(crearCasosDeUso(await adaptadoresEnMemoria({ jwtSecret: JWT_SECRET_TEST, rondasBcrypt: 4 })));
+  adaptadores = await adaptadoresEnMemoria({ jwtSecret: JWT_SECRET_TEST, rondasBcrypt: 4 });
+  app = crearApp(crearCasosDeUso(adaptadores));
   tokenAdmin = await login("admin@pcargo.ec", "Admin123!");
   tokenOperador = await login("operador@pcargo.ec", "Operador123!");
 });
@@ -272,14 +274,14 @@ describe("Flujo de un envío", () => {
     const creado = await request(app)
       .post("/api/clientes")
       .set(auth(tokenOperador))
-      .send({ nombre: "Comercial Otavalo", telefono: "062 920 333", direccion: "Sucre y Calderón" })
+      .send({ nombre: "Comercial Otavalo", telefono: "062 920 333", direccion: "Sucre y Calderón", consentimiento: true })
       .expect(201);
     expect(creado.body).toMatchObject({ nombre: "Comercial Otavalo", envios: 0, monto: 0, ultimoEnvio: null });
     const id = creado.body.id as string;
     const dup = await request(app)
       .post("/api/clientes")
       .set(auth(tokenOperador))
-      .send({ nombre: "Otro", telefono: "062920333" })
+      .send({ nombre: "Otro", telefono: "062920333", consentimiento: true })
       .expect(409);
     expect(dup.body.error.code).toBe("CONFLICTO");
     await request(app).post("/api/clientes").set(auth(tokenOperador)).send({ nombre: "Sin tel" }).expect(400);
@@ -315,5 +317,126 @@ describe("Flujo de un envío", () => {
     await request(app).delete(`/api/clientes/${id}`).set(auth(tokenOperador)).expect(204);
     await request(app).delete(`/api/clientes/${id}`).set(auth(tokenOperador)).expect(404);
     await request(app).get(`/api/envios/${envio.body.id}`).set(auth(tokenOperador)).expect(200);
+  });
+});
+
+describe("Consentimiento de datos personales (LOPDP)", () => {
+  const MENSAJE = "Se necesita el consentimiento del cliente para guardar sus datos";
+  const ESTEBAN = { nombre: "Esteban Ruiz", telefono: "0985550101" };
+
+  it("POST /clientes sin consentimiento true → 422 VALIDACION; con él fija consentimientoEn", async () => {
+    for (const extra of [{}, { consentimiento: false }, { consentimiento: "true" }, { consentimiento: null }]) {
+      const r = await request(app).post("/api/clientes").set(auth(tokenOperador)).send({ ...ESTEBAN, ...extra }).expect(422);
+      expect(r.body.error).toEqual({ code: "VALIDACION", message: MENSAJE });
+    }
+    const antes = Date.now();
+    const r = await request(app)
+      .post("/api/clientes")
+      .set(auth(tokenOperador))
+      .send({ ...ESTEBAN, consentimiento: true })
+      .expect(201);
+    expect(r.body.consentimientoEn).toEqual(r.body.creadoEn);
+    expect(new Date(r.body.consentimientoEn).getTime()).toBeGreaterThanOrEqual(antes - 1000);
+    expect(r.body).not.toHaveProperty("consentimiento");
+
+    const lista = await request(app).get("/api/clientes?q=esteban").set(auth(tokenOperador)).expect(200);
+    expect(lista.body[0].consentimientoEn).toBe(r.body.consentimientoEn);
+    await request(app).delete(`/api/clientes/${r.body.id}`).set(auth(tokenOperador)).expect(204);
+  });
+
+  it("PATCH /clientes/:id registra el consentimiento de un cliente antiguo y conserva la fecha original", async () => {
+    const id = "00000000-0000-4000-8000-0000000000a1";
+    const original = new Date("2026-09-01T10:00:00Z");
+    await adaptadores.clientes.crear({
+      id, nombre: "Rosa Cevallos", telefono: "0985550202", direccion: null, notas: null,
+      creadoEn: original, consentimientoEn: null,
+    });
+    const viejo = await request(app).get("/api/clientes?q=rosa").set(auth(tokenOperador)).expect(200);
+    expect(viejo.body[0].consentimientoEn).toBeNull();
+
+    // valores distintos de true → 422 sin tocar el cliente
+    for (const consentimiento of [false, null, "si"]) {
+      const r = await request(app)
+        .patch(`/api/clientes/${id}`)
+        .set(auth(tokenOperador))
+        .send({ notas: "x", consentimiento })
+        .expect(422);
+      expect(r.body.error.code).toBe("VALIDACION");
+    }
+
+    // solo `consentimiento: true` cuenta como "al menos un campo"
+    const registrado = await request(app)
+      .patch(`/api/clientes/${id}`)
+      .set(auth(tokenOperador))
+      .send({ consentimiento: true })
+      .expect(200);
+    expect(registrado.body).toMatchObject({ nombre: "Rosa Cevallos", notas: null });
+    const fecha = registrado.body.consentimientoEn as string;
+    expect(fecha).not.toBeNull();
+
+    const otraVez = await request(app)
+      .patch(`/api/clientes/${id}`)
+      .set(auth(tokenOperador))
+      .send({ notas: "Llamar antes", consentimiento: true })
+      .expect(200);
+    expect(otraVez.body).toMatchObject({ notas: "Llamar antes", consentimientoEn: fecha });
+    await request(app).delete(`/api/clientes/${id}`).set(auth(tokenOperador)).expect(204);
+  });
+
+  it("POST /envios con guardarCliente exige consentimientoCliente: true → 422; sin guardarCliente se ignora", async () => {
+    const remitente = { nombre: "Gloria Paredes", telefono: "0985550303" };
+    for (const extra of [{}, { consentimientoCliente: false }]) {
+      const r = await request(app)
+        .post("/api/envios")
+        .set(auth(tokenOperador))
+        .send(solicitudEnvio({ remitente, guardarCliente: true, ...extra }))
+        .expect(422);
+      expect(r.body.error).toEqual({ code: "VALIDACION", message: MENSAJE });
+    }
+    const sinGuardar = await request(app)
+      .post("/api/envios")
+      .set(auth(tokenOperador))
+      .send(solicitudEnvio({ remitente, consentimientoCliente: "cualquiera" }))
+      .expect(201);
+    expect(sinGuardar.body.clienteId).toBeNull();
+    expect((await request(app).get("/api/clientes?q=gloria").set(auth(tokenOperador))).body).toEqual([]);
+
+    const guardado = await request(app)
+      .post("/api/envios")
+      .set(auth(tokenOperador))
+      .send(solicitudEnvio({ remitente, guardarCliente: true, consentimientoCliente: true }))
+      .expect(201);
+    const lista = await request(app).get("/api/clientes?q=gloria").set(auth(tokenOperador)).expect(200);
+    expect(lista.body).toHaveLength(1);
+    expect(lista.body[0]).toMatchObject({ id: guardado.body.clienteId });
+    expect(lista.body[0].consentimientoEn).not.toBeNull();
+    await request(app).delete(`/api/clientes/${guardado.body.clienteId}`).set(auth(tokenOperador)).expect(204);
+  });
+
+  it("POST /envios con guardarCliente reutiliza un cliente sin consentimiento y lo registra", async () => {
+    const id = "00000000-0000-4000-8000-0000000000a2";
+    await adaptadores.clientes.crear({
+      id, nombre: "Hugo Benítez", telefono: "098 555 0404", direccion: null, notas: null,
+      creadoEn: new Date("2026-09-01T10:00:00Z"), consentimientoEn: null,
+    });
+    const remitente = { nombre: "Hugo Benítez", telefono: "0985550404" };
+    const e = await request(app)
+      .post("/api/envios")
+      .set(auth(tokenOperador))
+      .send(solicitudEnvio({ remitente, guardarCliente: true, consentimientoCliente: true }))
+      .expect(201);
+    expect(e.body.clienteId).toBe(id);
+    const [cliente] = (await request(app).get("/api/clientes?q=hugo").set(auth(tokenOperador)).expect(200)).body;
+    expect(cliente.consentimientoEn).not.toBeNull();
+
+    // un segundo envío no cambia la fecha registrada
+    await request(app)
+      .post("/api/envios")
+      .set(auth(tokenOperador))
+      .send(solicitudEnvio({ remitente, guardarCliente: true, consentimientoCliente: true }))
+      .expect(201);
+    const [despues] = (await request(app).get("/api/clientes?q=hugo").set(auth(tokenOperador))).body;
+    expect(despues).toMatchObject({ consentimientoEn: cliente.consentimientoEn, envios: 2 });
+    await request(app).delete(`/api/clientes/${id}`).set(auth(tokenOperador)).expect(204);
   });
 });

@@ -10,9 +10,10 @@ interface ClienteRow {
   direccion: string | null;
   notas: string | null;
   creado_en: Date;
+  consentimiento_en: Date | null;
 }
 
-const COLUMNAS = "id, nombre, telefono, direccion, notas, creado_en";
+const COLUMNAS = "id, nombre, telefono, direccion, notas, creado_en, consentimiento_en";
 
 const aCliente = (r: ClienteRow): Cliente => ({
   id: r.id,
@@ -21,6 +22,7 @@ const aCliente = (r: ClienteRow): Cliente => ({
   direccion: r.direccion,
   notas: r.notas,
   creadoEn: r.creado_en,
+  consentimientoEn: r.consentimiento_en,
 });
 
 /** Carrera entre dos altas con el mismo teléfono: decide el índice único. */
@@ -63,8 +65,8 @@ export class PgClienteRepository implements ClienteRepository {
 
   async crear(c: Cliente): Promise<void> {
     await this.db
-      .query(`INSERT INTO clientes (${COLUMNAS}) VALUES ($1, $2, $3, $4, $5, $6)`, [
-        c.id, c.nombre, c.telefono, c.direccion, c.notas, c.creadoEn,
+      .query(`INSERT INTO clientes (${COLUMNAS}) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [
+        c.id, c.nombre, c.telefono, c.direccion, c.notas, c.creadoEn, c.consentimientoEn,
       ])
       .catch((e) => traducirDuplicado(e, c.telefono));
   }
@@ -76,6 +78,15 @@ export class PgClienteRepository implements ClienteRepository {
         [id, d.nombre, d.telefono, d.direccion, d.notas],
       )
       .catch((e) => traducirDuplicado(e, d.telefono));
+    return aCliente(rows[0]!);
+  }
+
+  async registrarConsentimiento(id: string, fecha: Date): Promise<Cliente> {
+    // COALESCE: si ya había consentimiento se conserva la fecha original (lo que se debe poder demostrar)
+    const { rows } = await this.db.query<ClienteRow>(
+      `UPDATE clientes SET consentimiento_en = COALESCE(consentimiento_en, $2) WHERE id = $1 RETURNING ${COLUMNAS}`,
+      [id, fecha],
+    );
     return aCliente(rows[0]!);
   }
 

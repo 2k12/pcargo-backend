@@ -95,6 +95,8 @@ export interface ClienteRepository {
   buscarPorTelefono(telefono: string, excluirId?: string): Promise<Cliente | null>;
   crear(cliente: Cliente): Promise<void>;
   actualizar(id: string, datos: Required<DatosCliente>): Promise<Cliente>;
+  /** Registra el consentimiento solo si aún no tenía (conserva la fecha original). Devuelve el cliente. */
+  registrarConsentimiento(id: string, fecha: Date): Promise<Cliente>;
   /** Los envíos del cliente se conservan sin cliente asociado. */
   eliminar(id: string): Promise<void>;
 }

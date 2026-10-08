@@ -1,15 +1,22 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { adaptadoresEnMemoria, crearCasosDeUso, type CasosDeUso } from "../../../src/infrastructure/container.js";
+import {
+  adaptadoresEnMemoria,
+  crearCasosDeUso,
+  type Adaptadores,
+  type CasosDeUso,
+} from "../../../src/infrastructure/container.js";
 import { ADMIN, FakeClock, hasherFalso, item, JWT_SECRET_TEST, OPERADOR, SecuenciaIds, solicitudEnvio } from "../../helpers/fakes.js";
 
 let c: CasosDeUso;
+let a: Adaptadores;
 let clock: FakeClock;
 let ids: SecuenciaIds;
 
 beforeEach(async () => {
   clock = new FakeClock();
   ids = new SecuenciaIds();
-  c = crearCasosDeUso(await adaptadoresEnMemoria({ jwtSecret: JWT_SECRET_TEST, hasher: hasherFalso, clock, ids }));
+  a = await adaptadoresEnMemoria({ jwtSecret: JWT_SECRET_TEST, hasher: hasherFalso, clock, ids });
+  c = crearCasosDeUso(a);
 });
 
 describe("Login", () => {
@@ -138,7 +145,7 @@ describe("Estados, consultas y seguimiento", () => {
   });
 
   it("filtra por cliente y periodo, con serie diaria continua en hora de Ecuador", async () => {
-    const tienda = await c.crearCliente.ejecutar({ nombre: "Tienda La Esquina", telefono: "062 950 111" });
+    const tienda = await c.crearCliente.ejecutar({ nombre: "Tienda La Esquina", telefono: "062 950 111", consentimiento: true });
     // 2026-10-01T12:00Z = 07:00 en Ecuador
     await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ clienteId: tienda.id }));
     clock.avanzar(2 * 24 * 60); // 2026-10-03
@@ -172,6 +179,7 @@ describe("Clientes frecuentes", () => {
       nombre: "  Ferretería   Imbabura ",
       telefono: "06-295-0222",
       direccion: " Av. Mariano Acosta ",
+      consentimiento: true,
     });
     expect(a).toMatchObject({
       nombre: "Ferretería Imbabura",
@@ -181,7 +189,7 @@ describe("Clientes frecuentes", () => {
       envios: 0,
       monto: 0,
     });
-    await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991112233" });
+    await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991112233", consentimiento: true });
 
     expect((await c.listarClientes.ejecutar()).map((x) => x.nombre)).toEqual(["Ana López", "Ferretería Imbabura"]);
     expect((await c.listarClientes.ejecutar({ q: "ferre" })).map((x) => x.id)).toEqual([a.id]);
@@ -196,31 +204,31 @@ describe("Clientes frecuentes", () => {
   });
 
   it("no admite dos clientes con el mismo teléfono ni datos inválidos", async () => {
-    const a = await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991112233" });
-    const b = await c.crearCliente.ejecutar({ nombre: "Luis Mora", telefono: "0994445566" });
+    const a = await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991112233", consentimiento: true });
+    const b = await c.crearCliente.ejecutar({ nombre: "Luis Mora", telefono: "0994445566", consentimiento: true });
     const conflicto = { code: "CONFLICTO" };
-    await expect(c.crearCliente.ejecutar({ nombre: "Otra Ana", telefono: "099 111 2233" })).rejects.toMatchObject(conflicto);
+    await expect(c.crearCliente.ejecutar({ nombre: "Otra Ana", telefono: "099 111 2233", consentimiento: true })).rejects.toMatchObject(conflicto);
     await expect(c.actualizarCliente.ejecutar(b.id, { telefono: "0991112233" })).rejects.toMatchObject(conflicto);
     await expect(c.actualizarCliente.ejecutar(a.id, { telefono: "099 111 2233" })).resolves.toMatchObject({
       telefono: "099 111 2233",
     });
     const invalido = { code: "VALIDACION" };
-    await expect(c.crearCliente.ejecutar({ nombre: "X", telefono: "0991112299" })).rejects.toMatchObject(invalido);
-    await expect(c.crearCliente.ejecutar({ nombre: "Sin teléfono", telefono: "12" })).rejects.toMatchObject(invalido);
+    await expect(c.crearCliente.ejecutar({ nombre: "X", telefono: "0991112299", consentimiento: true })).rejects.toMatchObject(invalido);
+    await expect(c.crearCliente.ejecutar({ nombre: "Sin teléfono", telefono: "12", consentimiento: true })).rejects.toMatchObject(invalido);
   });
 
   it("asocia envíos al cliente: elegido, guardado al vuelo o reconocido por su teléfono", async () => {
-    const tienda = await c.crearCliente.ejecutar({ nombre: "Tienda La Esquina", telefono: "062950111" });
+    const tienda = await c.crearCliente.ejecutar({ nombre: "Tienda La Esquina", telefono: "062950111", consentimiento: true });
     const elegido = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ clienteId: tienda.id }));
     expect(elegido.clienteId).toBe(tienda.id);
 
-    const nuevo = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true }));
+    const nuevo = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true, consentimientoCliente: true }));
     const maria = (await c.listarClientes.ejecutar()).find((x) => x.nombre === "María Pérez")!;
     expect(nuevo.clienteId).toBe(maria.id);
 
     // Mismo teléfono: se reconoce sin duplicar, aunque no se pida guardarlo
     const otraVez = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
-    const deNuevo = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true }));
+    const deNuevo = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true, consentimientoCliente: true }));
     expect([otraVez.clienteId, deNuevo.clienteId]).toEqual([maria.id, maria.id]);
     expect(await c.listarClientes.ejecutar()).toHaveLength(2);
 
@@ -239,9 +247,104 @@ describe("Clientes frecuentes", () => {
   });
 
   it("no da de alta al cliente si el envío es inválido", async () => {
-    const invalido = solicitudEnvio({ guardarCliente: true, destinatario: { nombre: "", telefono: "1", direccion: "" } });
+    const invalido = solicitudEnvio({ guardarCliente: true, consentimientoCliente: true, destinatario: { nombre: "", telefono: "1", direccion: "" } });
     await expect(c.crearEnvio.ejecutar(OPERADOR, invalido)).rejects.toMatchObject({ code: "VALIDACION" });
     expect(await c.listarClientes.ejecutar()).toEqual([]);
+  });
+});
+
+describe("Consentimiento de datos personales (LOPDP)", () => {
+  const ANA = { nombre: "Ana López", telefono: "0991112233" };
+  const MENSAJE = "Se necesita el consentimiento del cliente para guardar sus datos";
+
+  it("no guarda un cliente sin consentimiento expreso", async () => {
+    for (const consentimiento of [undefined, false, "true", 1, null]) {
+      await expect(c.crearCliente.ejecutar({ ...ANA, consentimiento })).rejects.toMatchObject({
+        code: "VALIDACION",
+        regla: true,
+        message: MENSAJE,
+      });
+    }
+    expect(await c.listarClientes.ejecutar()).toEqual([]);
+  });
+
+  it("al crear fija consentimientoEn con el reloj del servidor", async () => {
+    const cliente = await c.crearCliente.ejecutar({ ...ANA, consentimiento: true });
+    expect(cliente.consentimientoEn).toBe("2026-10-01T12:00:00.000Z");
+    expect(cliente.creadoEn).toBe(cliente.consentimientoEn);
+  });
+
+  it("PATCH registra el consentimiento de un cliente antiguo y luego conserva la fecha original", async () => {
+    const id = "00000000-0000-4000-c000-000000000010";
+    await a.clientes.crear({ id, ...ANA, direccion: null, notas: null, creadoEn: new Date("2026-09-01T00:00:00Z"), consentimientoEn: null });
+    expect((await c.listarClientes.ejecutar())[0]?.consentimientoEn).toBeNull();
+
+    clock.avanzar(60);
+    // solo el consentimiento cuenta como cambio
+    expect(await c.actualizarCliente.ejecutar(id, { consentimiento: true })).toMatchObject({
+      nombre: "Ana López",
+      consentimientoEn: "2026-10-01T13:00:00.000Z",
+    });
+
+    clock.avanzar(60);
+    const otraVez = await c.actualizarCliente.ejecutar(id, { notas: "Prefiere WhatsApp", consentimiento: true });
+    expect(otraVez).toMatchObject({ notas: "Prefiere WhatsApp", consentimientoEn: "2026-10-01T13:00:00.000Z" });
+    // editar sin consentimiento tampoco lo toca
+    expect((await c.actualizarCliente.ejecutar(id, { notas: null })).consentimientoEn).toBe("2026-10-01T13:00:00.000Z");
+  });
+
+  it("PATCH con consentimiento distinto de true → VALIDACION (no se revoca editando)", async () => {
+    const cliente = await c.crearCliente.ejecutar({ ...ANA, consentimiento: true });
+    for (const consentimiento of [false, null, "si"]) {
+      await expect(c.actualizarCliente.ejecutar(cliente.id, { notas: "x", consentimiento })).rejects.toMatchObject({
+        code: "VALIDACION",
+        regla: true,
+      });
+    }
+    expect((await c.listarClientes.ejecutar())[0]).toMatchObject({ notas: null, consentimientoEn: cliente.consentimientoEn });
+  });
+
+  it("guardarCliente sin consentimientoCliente → VALIDACION y no se crea ni el envío ni el cliente", async () => {
+    for (const consentimientoCliente of [undefined, false]) {
+      await expect(
+        c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true, consentimientoCliente })),
+      ).rejects.toMatchObject({ code: "VALIDACION", regla: true, message: MENSAJE });
+    }
+    expect(await c.listarClientes.ejecutar()).toEqual([]);
+    expect((await c.listarEnvios.ejecutar({})).total).toBe(0);
+  });
+
+  it("guardarCliente con consentimiento crea al cliente con la fecha; sin guardarCliente se ignora", async () => {
+    const ocasional = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ consentimientoCliente: false }));
+    expect(ocasional.clienteId).toBeNull();
+    expect(await c.listarClientes.ejecutar()).toEqual([]);
+
+    clock.avanzar(5);
+    const e = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true, consentimientoCliente: true }));
+    expect((await c.listarClientes.ejecutar())[0]).toMatchObject({
+      id: e.clienteId,
+      nombre: "María Pérez",
+      consentimientoEn: "2026-10-01T12:05:00.000Z",
+    });
+  });
+
+  it("guardarCliente reutilizando un cliente sin consentimiento lo registra en ese momento", async () => {
+    const id = "00000000-0000-4000-c000-000000000011";
+    // mismo teléfono que el remitente de solicitudEnvio(), cliente anterior a v7
+    await a.clientes.crear({
+      id, nombre: "María Pérez", telefono: "099 123 4567", direccion: null, notas: null,
+      creadoEn: new Date("2026-09-01T00:00:00Z"), consentimientoEn: null,
+    });
+    clock.avanzar(30);
+    const e = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true, consentimientoCliente: true }));
+    expect(e.clienteId).toBe(id);
+    expect((await a.clientes.buscarPorId(id))?.consentimientoEn).toEqual(new Date("2026-10-01T12:30:00Z"));
+
+    // ya registrado: un nuevo envío no cambia la fecha original
+    clock.avanzar(30);
+    await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true, consentimientoCliente: true }));
+    expect((await a.clientes.buscarPorId(id))?.consentimientoEn).toEqual(new Date("2026-10-01T12:30:00Z"));
+    expect(await c.listarClientes.ejecutar()).toHaveLength(1);
   });
 });
 

@@ -1,4 +1,10 @@
-import { digitosTelefono, normalizarCliente, type Cliente, type DatosCliente } from "../../../domain/cliente/Cliente.js";
+import {
+  digitosTelefono,
+  exigirConsentimiento,
+  normalizarCliente,
+  type Cliente,
+  type DatosCliente,
+} from "../../../domain/cliente/Cliente.js";
 import type { Envio } from "../../../domain/envio/Envio.js";
 import { DomainError, redondear2 } from "../../../domain/shared/DomainError.js";
 import type { ClienteRepository, EnvioRepository } from "../../ports/repositories.js";
@@ -11,6 +17,8 @@ export interface ClienteDTO {
   direccion: string | null;
   notas: string | null;
   creadoEn: string;
+  /** Cuándo aceptó que se guarden sus datos (LOPDP); null en clientes anteriores a v7. */
+  consentimientoEn: string | null;
   /** Envíos registrados a nombre del cliente (incluye cancelados). */
   envios: number;
   /** Suma de los envíos no cancelados. */
@@ -46,11 +54,18 @@ export function toClienteDTO(c: Cliente, est?: Estadistica): ClienteDTO {
     direccion: c.direccion,
     notas: c.notas,
     creadoEn: c.creadoEn.toISOString(),
+    consentimientoEn: c.consentimientoEn?.toISOString() ?? null,
     envios: est?.envios ?? 0,
     monto: redondear2(est?.monto ?? 0),
     ultimoEnvio: est?.ultimo?.toISOString() ?? null,
   };
 }
+
+/** Datos de alta de un cliente: `consentimiento` debe ser `true` (se valida aquí, no en la capa HTTP). */
+export type AltaCliente = DatosCliente & { consentimiento?: unknown };
+
+/** Cambios de un cliente: `consentimiento`, si viene, solo puede ser `true` (no se revoca por edición). */
+export type CambiosCliente = Partial<DatosCliente> & { consentimiento?: unknown };
 
 async function exigirTelefonoLibre(clientes: ClienteRepository, telefono: string, excluirId?: string): Promise<void> {
   const otro = await clientes.buscarPorTelefono(telefono, excluirId);
@@ -77,29 +92,38 @@ export class CrearCliente {
     private readonly clock: Clock,
   ) {}
 
-  async ejecutar(datos: DatosCliente): Promise<ClienteDTO> {
+  async ejecutar({ consentimiento, ...datos }: AltaCliente): Promise<ClienteDTO> {
+    exigirConsentimiento(consentimiento);
     const limpio = normalizarCliente(datos);
     await exigirTelefonoLibre(this.clientes, limpio.telefono);
-    const cliente: Cliente = { id: this.ids.uuid(), ...limpio, creadoEn: this.clock.ahora() };
+    const ahora = this.clock.ahora();
+    const cliente: Cliente = { id: this.ids.uuid(), ...limpio, creadoEn: ahora, consentimientoEn: ahora };
     await this.clientes.crear(cliente);
     return toClienteDTO(cliente);
   }
-
 }
 
 /**
- * Alta rápida desde un envío: si ya hay un cliente con ese teléfono lo reutiliza
- * (no falla ni duplica); si no, lo crea.
+ * Alta rápida desde un envío (exige el consentimiento del remitente): si ya hay un cliente con ese teléfono
+ * lo reutiliza (no falla ni duplica) y, si aún no tenía consentimiento registrado, lo registra ahora;
+ * si no, lo crea con el consentimiento de este momento.
  */
 export async function obtenerOCrearCliente(
   clientes: ClienteRepository,
   ctx: { ids: IdGenerator; clock: Clock },
   datos: DatosCliente,
+  consentimiento: unknown,
 ): Promise<Cliente> {
+  exigirConsentimiento(consentimiento);
   const limpio = normalizarCliente(datos);
   const existente = await clientes.buscarPorTelefono(limpio.telefono);
-  if (existente) return existente;
-  const cliente: Cliente = { id: ctx.ids.uuid(), ...limpio, creadoEn: ctx.clock.ahora() };
+  if (existente) {
+    return existente.consentimientoEn
+      ? existente
+      : clientes.registrarConsentimiento(existente.id, ctx.clock.ahora());
+  }
+  const ahora = ctx.clock.ahora();
+  const cliente: Cliente = { id: ctx.ids.uuid(), ...limpio, creadoEn: ahora, consentimientoEn: ahora };
   await clientes.crear(cliente);
   return cliente;
 }
@@ -108,19 +132,24 @@ export class ActualizarCliente {
   constructor(
     private readonly clientes: ClienteRepository,
     private readonly envios: EnvioRepository,
+    private readonly clock: Clock,
   ) {}
 
-  async ejecutar(id: string, cambios: Partial<DatosCliente>): Promise<ClienteDTO> {
+  async ejecutar(id: string, { consentimiento, ...cambios }: CambiosCliente): Promise<ClienteDTO> {
+    const registrar = consentimiento !== undefined;
+    if (registrar) exigirConsentimiento(consentimiento);
     const actual = await this.clientes.buscarPorId(id);
     if (!actual) throw new DomainError("NO_ENCONTRADO", "Cliente no encontrado");
     const limpio = normalizarCliente({ ...actual, ...cambios });
     if (digitosTelefono(limpio.telefono) !== digitosTelefono(actual.telefono)) {
       await exigirTelefonoLibre(this.clientes, limpio.telefono, id);
     }
-    const [cliente, envios] = await Promise.all([
+    const [actualizado, envios] = await Promise.all([
       this.clientes.actualizar(id, limpio),
       this.envios.listar({ clienteId: id }),
     ]);
+    // Si ya tenía consentimiento el repositorio conserva la fecha original.
+    const cliente = registrar ? await this.clientes.registrarConsentimiento(id, this.clock.ahora()) : actualizado;
     return toClienteDTO(cliente, estadisticas(envios).get(id));
   }
 }

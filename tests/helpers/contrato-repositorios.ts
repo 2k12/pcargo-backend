@@ -140,8 +140,8 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
     it("guarda clientes, los encuentra por teléfono y filtra envíos por cliente", async () => {
       const id = "00000000-0000-4000-c000-000000000001";
       const creadoEn = new Date(Date.UTC(2026, 9, 1));
-      await repos.clientes.crear({ id, nombre: "Tienda La Esquina", telefono: "062 950 111", direccion: null, notas: null, creadoEn });
-      expect(await repos.clientes.buscarPorTelefono("062950111")).toMatchObject({ id, nombre: "Tienda La Esquina" });
+      await repos.clientes.crear({ id, nombre: "Tienda La Esquina", telefono: "062 950 111", direccion: null, notas: null, creadoEn, consentimientoEn: creadoEn });
+      expect(await repos.clientes.buscarPorTelefono("062950111")).toMatchObject({ id, nombre: "Tienda La Esquina", consentimientoEn: creadoEn });
       expect(await repos.clientes.buscarPorTelefono("062950111", id)).toBeNull();
       expect((await repos.clientes.listar({ q: "esquina" })).map((c) => c.id)).toEqual([id]);
       expect((await repos.clientes.listar({ q: "950" })).map((c) => c.id)).toEqual([id]);
@@ -165,6 +165,25 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       await repos.clientes.eliminar(id);
       expect(await repos.clientes.buscarPorId(id)).toBeNull();
       expect(await repos.envios.buscarPorId(delCliente.id)).not.toBeNull();
+    });
+
+    it("registra el consentimiento de un cliente sin él y conserva la fecha original (LOPDP)", async () => {
+      const id = "00000000-0000-4000-c000-000000000002";
+      const creadoEn = new Date(Date.UTC(2026, 8, 1));
+      // cliente anterior a v7: sin consentimiento
+      await repos.clientes.crear({ id, nombre: "Ana López", telefono: "0991112233", direccion: null, notas: null, creadoEn, consentimientoEn: null });
+      expect((await repos.clientes.buscarPorId(id))?.consentimientoEn).toBeNull();
+
+      const primera = new Date(Date.UTC(2026, 9, 5, 15));
+      expect((await repos.clientes.registrarConsentimiento(id, primera)).consentimientoEn).toEqual(primera);
+      // un segundo registro no cambia la fecha
+      const despues = await repos.clientes.registrarConsentimiento(id, new Date(Date.UTC(2026, 9, 6)));
+      expect(despues).toMatchObject({ id, nombre: "Ana López", consentimientoEn: primera });
+      expect((await repos.clientes.listar({ q: "ana" }))[0]?.consentimientoEn).toEqual(primera);
+
+      // editar los datos no toca el consentimiento
+      const editado = await repos.clientes.actualizar(id, { nombre: "Ana María López", telefono: "0991112233", direccion: null, notas: null });
+      expect(editado.consentimientoEn).toEqual(primera);
     });
 
     it("devuelve null para envíos inexistentes", async () => {

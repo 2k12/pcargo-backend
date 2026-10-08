@@ -9,6 +9,11 @@ export interface Cliente {
   direccion: string | null;
   notas: string | null;
   creadoEn: Date;
+  /**
+   * Cuándo aceptó el titular que se guarden sus datos (LOPDP Ecuador). `null`: cliente anterior a v7,
+   * aún sin consentimiento registrado.
+   */
+  consentimientoEn: Date | null;
 }
 
 export interface DatosCliente {
@@ -33,4 +38,18 @@ export function normalizarCliente(d: DatosCliente): Required<DatosCliente> {
   const telefono = d.telefono?.trim().replace(/[-\s]+/g, " ") ?? "";
   if (!TELEFONO.test(telefono)) throw new DomainError("VALIDACION", "El teléfono del cliente no es válido");
   return { nombre, telefono, direccion: opcional(d.direccion), notas: opcional(d.notas) };
+}
+
+/**
+ * Guardar a alguien como cliente frecuente es un tratamiento adicional al envío: exige el consentimiento
+ * expreso del titular (Ley Orgánica de Protección de Datos Personales). Solo `true` lo acredita.
+ */
+export function exigirConsentimiento(consentimiento: unknown): void {
+  if (consentimiento !== true) {
+    throw new DomainError(
+      "VALIDACION",
+      "Se necesita el consentimiento del cliente para guardar sus datos",
+      { regla: true },
+    );
+  }
 }

@@ -16,7 +16,9 @@ const STATUS: Record<ErrorCode, number> = {
 
 export function manejarErrores(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
   if (err instanceof DomainError) {
-    res.status(STATUS[err.code]).json({ error: { code: err.code, message: err.message } });
+    // VALIDACION de una regla de negocio (datos bien formados pero no admitidos) → 422
+    const status = err.code === "VALIDACION" && err.regla ? 422 : STATUS[err.code];
+    res.status(status).json({ error: { code: err.code, message: err.message } });
     return;
   }
   if (err instanceof ZodError) {

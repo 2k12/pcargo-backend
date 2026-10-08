@@ -33,6 +33,8 @@ export const crearEnvioSchema = cotizacionSchema.extend({
   numeroGuia: z.union([z.string().max(40), z.number()]).nullish(),
   clienteId: z.uuid("cliente inválido").nullish(),
   guardarCliente: z.boolean().optional(),
+  // el caso de uso exige `true` junto con guardarCliente (422); sin guardarCliente se ignora
+  consentimientoCliente: z.unknown().optional(),
 });
 
 export const cambioEstadoSchema = z.object({
@@ -61,15 +63,21 @@ export const filtroResumenSchema = z.object({
 
 const opcional = z.string().max(300).nullish();
 
-export const crearClienteSchema = z.object({
+const datosClienteSchema = z.object({
   nombre: z.string().max(200),
   telefono: z.string().max(40),
   direccion: opcional,
   notas: opcional,
 });
 
-export const actualizarClienteSchema = crearClienteSchema
+// `consentimiento` es una regla de negocio (LOPDP): el caso de uso exige `true` y responde 422 si no.
+const consentimiento = z.unknown().optional();
+
+export const crearClienteSchema = datosClienteSchema.extend({ consentimiento });
+
+export const actualizarClienteSchema = datosClienteSchema
   .partial()
+  .extend({ consentimiento })
   .refine((v) => Object.values(v).some((x) => x !== undefined), "Debe enviar al menos un campo");
 
 export const crearRutaSchema = z.object({

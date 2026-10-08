@@ -120,7 +120,7 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache()) {
     // Los nombres de clientes aparecen en el resumen: sus escrituras invalidan el dashboard.
     listarClientes: new ListarClientes(a.clientes, a.envios),
     crearCliente: invalidaTras(new CrearCliente(a.clientes, a.ids, a.clock), cache, [ESPACIOS.dashboard]),
-    actualizarCliente: invalidaTras(new ActualizarCliente(a.clientes, a.envios), cache, [ESPACIOS.dashboard]),
+    actualizarCliente: invalidaTras(new ActualizarCliente(a.clientes, a.envios, a.clock), cache, [ESPACIOS.dashboard]),
     eliminarCliente: invalidaTras(new EliminarCliente(a.clientes), cache, [ESPACIOS.dashboard]),
     listarEnvios: new ListarEnvios(a.envios, rutas),
     obtenerEnvio: new ObtenerEnvio(a.envios, rutas),

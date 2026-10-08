@@ -23,6 +23,8 @@ export interface SolicitudEnvio {
   clienteId?: string | null;
   /** Sin `clienteId`: guarda al remitente como cliente frecuente (o reutiliza el que tenga su teléfono). */
   guardarCliente?: boolean;
+  /** Obligatorio (`true`) junto con `guardarCliente`: el remitente acepta que se guarden sus datos (LOPDP). */
+  consentimientoCliente?: unknown;
 }
 
 const MAX_INTENTOS_GUIA = 5;
@@ -73,7 +75,8 @@ export class CrearEnvio {
       return s.clienteId;
     }
     if (s.guardarCliente) {
-      return (await obtenerOCrearCliente(this.clientes, { ids: this.ids, clock: this.clock }, s.remitente)).id;
+      const ctx = { ids: this.ids, clock: this.clock };
+      return (await obtenerOCrearCliente(this.clientes, ctx, s.remitente, s.consentimientoCliente)).id;
     }
     return (await this.clientes.buscarPorTelefono(s.remitente.telefono))?.id ?? null;
   }
