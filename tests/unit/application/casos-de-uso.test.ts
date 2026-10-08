@@ -36,7 +36,7 @@ describe("Cotizar y crear envío", () => {
   it("crea el envío cobrando el costo cotizado", async () => {
     const e = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
     expect(e).toMatchObject({
-      codigo: "PC-TEST0002",
+      numeroGuia: 1,
       estado: "REGISTRADO",
       costo: 8.9,
       ruta: { id: 11, origen: "Ibarra", destino: "Quito" },
@@ -46,11 +46,13 @@ describe("Cotizar y crear envío", () => {
     ]);
   });
 
-  it("reintenta si el código de seguimiento ya existe", async () => {
-    ids = new SecuenciaIds(["PC-REPETIDO", "PC-REPETIDO", "PC-UNICO000"]);
-    c = crearCasosDeUso(await adaptadoresEnMemoria({ jwtSecret: JWT_SECRET_TEST, hasher: hasherFalso, ids }));
-    await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
-    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio())).codigo).toBe("PC-UNICO000");
+  it("usa el número de la guía física (con o sin ceros) y si no hay, asigna el consecutivo", async () => {
+    const fisica = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "0040425" }));
+    expect(fisica.numeroGuia).toBe(40425);
+    await expect(c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "40425" }))).rejects.toMatchObject({ code: "CONFLICTO" });
+    await expect(c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "PC-12" }))).rejects.toMatchObject({ code: "VALIDACION" });
+    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "  " }))).numeroGuia).toBe(40426);
+    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio())).numeroGuia).toBe(40427);
   });
 
   it("no permite enviar por una ruta inactiva", async () => {
@@ -69,8 +71,8 @@ describe("Estados, consultas y seguimiento", () => {
     const e = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
     clock.avanzar(30);
     await c.cambiarEstado.ejecutar(OPERADOR, e.id, "EN_TRANSITO", "Salió en bus de las 10:00");
-    const s = await c.seguimiento.ejecutar(e.codigo.toLowerCase());
-    expect(s).toMatchObject({ codigo: e.codigo, estado: "EN_TRANSITO", origen: "Ibarra", destino: "Quito" });
+    const s = await c.seguimiento.ejecutar(`000${e.numeroGuia}`);
+    expect(s).toMatchObject({ numeroGuia: e.numeroGuia, estado: "EN_TRANSITO", origen: "Ibarra", destino: "Quito" });
     expect(s.historial.map((h) => h.usuario)).toEqual([null, null]);
     expect(JSON.stringify(s)).not.toContain("María");
   });
@@ -79,7 +81,8 @@ describe("Estados, consultas y seguimiento", () => {
     const e = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
     await expect(c.cambiarEstado.ejecutar(OPERADOR, e.id, "ENTREGADO")).rejects.toMatchObject({ code: "TRANSICION_INVALIDA" });
     await expect(c.obtenerEnvio.ejecutar("no-existe")).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
-    await expect(c.seguimiento.ejecutar("PC-XXXXXXXX")).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+    await expect(c.seguimiento.ejecutar("999999")).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+    await expect(c.seguimiento.ejecutar("PC-XXXXXXXX")).rejects.toMatchObject({ code: "VALIDACION" });
   });
 
   it("filtra envíos por estado, ruta y texto, más recientes primero", async () => {
@@ -92,6 +95,7 @@ describe("Estados, consultas y seguimiento", () => {
     expect((await c.listarEnvios.ejecutar({ estado: "CANCELADO" })).map((e) => e.id)).toEqual([a.id]);
     expect((await c.listarEnvios.ejecutar({ rutaId: 1 })).map((e) => e.id)).toEqual([b.id]);
     expect((await c.listarEnvios.ejecutar({ q: "rosa" })).map((e) => e.id)).toEqual([b.id]);
+    expect((await c.listarEnvios.ejecutar({ q: `00${a.numeroGuia}` })).map((e) => e.id)).toEqual([a.id]);
   });
 
   it("resume envíos e ingresos excluyendo cancelados", async () => {

@@ -29,8 +29,8 @@ export function crearRouter(c: CasosDeUso): Router {
     res.json(await c.login.ejecutar(email, password));
   });
 
-  publico.get("/seguimiento/:codigo", async (req, res) => {
-    res.json(await c.seguimiento.ejecutar(req.params.codigo));
+  publico.get("/seguimiento/:numeroGuia", async (req, res) => {
+    res.json(await c.seguimiento.ejecutar(req.params.numeroGuia));
   });
 
   // Web pública (landing): catálogo de servicios/tarifas y cotizador sin sesión.

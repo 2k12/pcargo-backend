@@ -158,13 +158,17 @@ export class InMemoryEnvioRepository implements EnvioRepository {
     return p ? Envio.reconstruir(p) : null;
   }
 
-  async buscarPorCodigo(codigo: string): Promise<Envio | null> {
-    const p = [...this.datos.values()].find((x) => x.codigo === codigo);
+  async buscarPorNumeroGuia(numeroGuia: number): Promise<Envio | null> {
+    const p = [...this.datos.values()].find((x) => x.numeroGuia === numeroGuia);
     return p ? Envio.reconstruir(p) : null;
   }
 
-  async existeCodigo(codigo: string): Promise<boolean> {
-    return [...this.datos.values()].some((x) => x.codigo === codigo);
+  async existeNumeroGuia(numeroGuia: number): Promise<boolean> {
+    return [...this.datos.values()].some((x) => x.numeroGuia === numeroGuia);
+  }
+
+  async siguienteNumeroGuia(): Promise<number> {
+    return Math.max(0, ...[...this.datos.values()].map((x) => x.numeroGuia)) + 1;
   }
 
   async listar(filtro: FiltroEnvios = {}): Promise<Envio[]> {
@@ -176,7 +180,8 @@ export class InMemoryEnvioRepository implements EnvioRepository {
       .filter(
         (p) =>
           !q ||
-          [p.codigo, p.remitente.nombre, p.destinatario.nombre].some((v) => v.toLowerCase().includes(q)),
+          p.numeroGuia === filtro.numeroGuia ||
+          [p.remitente.nombre, p.destinatario.nombre].some((v) => v.toLowerCase().includes(q)),
       )
       .sort((a, b) => b.creadoEn.getTime() - a.creadoEn.getTime())
       .map((p) => Envio.reconstruir(p));

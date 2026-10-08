@@ -14,12 +14,8 @@ export class FakeClock implements Clock {
 
 export class SecuenciaIds implements IdGenerator {
   private n = 0;
-  constructor(private readonly codigos: string[] = []) {}
   uuid(): string {
     return `00000000-0000-4000-a000-${String(++this.n).padStart(12, "0")}`;
-  }
-  codigoSeguimiento(): string {
-    return this.codigos.shift() ?? `PC-TEST${String(++this.n).padStart(4, "0")}`;
   }
 }
 

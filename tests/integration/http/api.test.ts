@@ -86,6 +86,23 @@ describe("Web pública (sin sesión)", () => {
   });
 });
 
+describe("Número de guía", () => {
+  it("se registra desde la guía física, rechaza duplicados con o sin ceros y busca ignorando ceros", async () => {
+    const r = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ numeroGuia: "0050001" })).expect(201);
+    expect(r.body.numeroGuia).toBe(50001);
+    const dup = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ numeroGuia: 50001 })).expect(409);
+    expect(dup.body.error.message).toMatch(/50001/);
+    await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ numeroGuia: "50-001" })).expect(400);
+
+    const lista = await request(app).get("/api/envios?q=0000050001").set(auth(tokenOperador)).expect(200);
+    expect(lista.body.map((e: { numeroGuia: number }) => e.numeroGuia)).toEqual([50001]);
+    await request(app).get("/api/seguimiento/050001").expect(200);
+
+    const auto = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio()).expect(201);
+    expect(auto.body.numeroGuia).toBe(50002);
+  });
+});
+
 describe("Ciudades de cobertura (ADMIN)", () => {
   it("crea, renombra, desactiva y elimina; OPERADOR recibe 403", async () => {
     await request(app).post("/api/ciudades").set(auth(tokenOperador)).send({ nombre: "Cayambe" }).expect(403);
@@ -177,8 +194,8 @@ describe("Flujo de un envío", () => {
       registro: { operador: "Operador Ibarra" },
       entrega: null,
     });
-    expect(creado.body.codigo).toMatch(/^PC-[A-Z0-9]{8}$/);
-    const { id, codigo } = creado.body;
+    const { id, numeroGuia } = creado.body;
+    expect(numeroGuia).toBeGreaterThan(0);
 
     for (const estado of ["EN_TRANSITO", "EN_REPARTO", "ENTREGADO"]) {
       await request(app).patch(`/api/envios/${id}/estado`).set(auth(tokenOperador)).send({ estado }).expect(200);
@@ -189,8 +206,9 @@ describe("Flujo de un envío", () => {
       "REGISTRADO", "EN_TRANSITO", "EN_REPARTO", "ENTREGADO",
     ]);
 
-    const seg = await request(app).get(`/api/seguimiento/${codigo}`).expect(200);
-    expect(seg.body).toMatchObject({ codigo, estado: "ENTREGADO", origen: "Ibarra", destino: "Quito" });
+    // con ceros a la izquierda es la misma guía
+    const seg = await request(app).get(`/api/seguimiento/00${numeroGuia}`).expect(200);
+    expect(seg.body).toMatchObject({ numeroGuia, estado: "ENTREGADO", origen: "Ibarra", destino: "Quito" });
     expect(seg.body).not.toHaveProperty("destinatario");
 
     const lista = await request(app).get("/api/envios?estado=ENTREGADO").set(auth(tokenOperador)).expect(200);
@@ -238,6 +256,7 @@ describe("Flujo de un envío", () => {
     await request(app).post("/api/envios").set(auth(tokenOperador)).send({ rutaId: 11 }).expect(400);
     await request(app).get("/api/envios/no-uuid").set(auth(tokenOperador)).expect(400);
     await request(app).get("/api/envios/00000000-0000-4000-8000-00000000ffff").set(auth(tokenOperador)).expect(404);
-    await request(app).get("/api/seguimiento/PC-NOEXISTE").expect(404);
+    await request(app).get("/api/seguimiento/987654321").expect(404);
+    await request(app).get("/api/seguimiento/PC-NOEXISTE").expect(400);
   });
 });

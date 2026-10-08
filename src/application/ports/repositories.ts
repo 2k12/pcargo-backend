@@ -60,14 +60,18 @@ export interface FiltroEnvios {
   estado?: EstadoEnvio;
   rutaId?: number;
   formaPago?: FormaPago;
-  /** Busca en código, remitente y destinatario (sin distinguir mayúsculas). */
+  /** Número de guía exacto (se combina con `q` mediante OR). */
+  numeroGuia?: number;
+  /** Busca en remitente y destinatario (sin distinguir mayúsculas). */
   q?: string;
 }
 
 export interface EnvioRepository {
   guardar(envio: Envio): Promise<void>;
   buscarPorId(id: string): Promise<Envio | null>;
-  buscarPorCodigo(codigo: string): Promise<Envio | null>;
-  existeCodigo(codigo: string): Promise<boolean>;
+  buscarPorNumeroGuia(numeroGuia: number): Promise<Envio | null>;
+  existeNumeroGuia(numeroGuia: number): Promise<boolean>;
+  /** Máximo número de guía registrado + 1 (1 si no hay envíos). */
+  siguienteNumeroGuia(): Promise<number>;
   listar(filtro?: FiltroEnvios): Promise<Envio[]>;
 }

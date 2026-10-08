@@ -17,5 +17,4 @@ export interface Clock {
 
 export interface IdGenerator {
   uuid(): string;
-  codigoSeguimiento(): string;
 }

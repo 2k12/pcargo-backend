@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { generarCodigoSeguimiento, PATRON_CODIGO } from "../../../src/domain/envio/CodigoSeguimiento.js";
 import { Envio, type NuevoEnvio } from "../../../src/domain/envio/Envio.js";
 import { ESTADOS, puedeTransicionar } from "../../../src/domain/envio/EstadoEnvio.js";
+import { pareceNumeroGuia, parsearNumeroGuia } from "../../../src/domain/envio/NumeroGuia.js";
 import { conEstado, esOperativa, nombreRuta, normalizarNombreCiudad, validarDatosRuta } from "../../../src/domain/ruta/Ruta.js";
 import { ADMIN, OPERADOR } from "../../helpers/fakes.js";
 
@@ -18,7 +18,7 @@ const datos: NuevoEnvio = {
   formaPago: "AL_COBRO",
 };
 const crear = (d: Partial<NuevoEnvio> = {}) =>
-  Envio.crear({ ...datos, ...d }, { id: "e1", codigo: "PC-ABCD2345", ahora, actor: OPERADOR });
+  Envio.crear({ ...datos, ...d }, { id: "e1", numeroGuia: 40425, ahora, actor: OPERADOR });
 
 describe("Envio", () => {
   it("se crea REGISTRADO con totales de piezas, peso y costo, y registro (fecha + operador)", () => {
@@ -109,13 +109,33 @@ describe("máquina de estados", () => {
   });
 });
 
-describe("código de seguimiento", () => {
-  it("cumple el patrón PC-XXXXXXXX", () => {
-    for (let i = 0; i < 50; i++) expect(generarCodigoSeguimiento()).toMatch(PATRON_CODIGO);
+describe("número de guía", () => {
+  it.each([
+    ["0040425", 40425],
+    ["40425", 40425],
+    ["  00 40 425 ", 40425],
+    [40425, 40425],
+    ["000000000001", 1],
+  ])("%j se interpreta como %i (ignora ceros a la izquierda y espacios)", (entrada, esperado) => {
+    expect(parsearNumeroGuia(entrada)).toBe(esperado);
   });
 
-  it("es determinista con un generador aleatorio fijo", () => {
-    expect(generarCodigoSeguimiento(() => 0)).toBe("PC-AAAAAAAA");
+  it.each(["PC-7K2M9QXA", "40-425", "4.5", "", "0000", "-12", "1234567890123"])("rechaza %j", (entrada) => {
+    expect(() => parsearNumeroGuia(entrada)).toThrow(/número de guía/);
+  });
+
+  it("acepta hasta 12 dígitos significativos aunque tenga ceros delante", () => {
+    expect(parsearNumeroGuia("000999999999999")).toBe(999999999999);
+  });
+
+  it("detecta textos de búsqueda que son números", () => {
+    expect(pareceNumeroGuia(" 0040425 ")).toBe(true);
+    expect(pareceNumeroGuia("Rosa")).toBe(false);
+    expect(pareceNumeroGuia("40425a")).toBe(false);
+  });
+
+  it("el envío conserva su número de guía", () => {
+    expect(crear().numeroGuia).toBe(40425);
   });
 });
 

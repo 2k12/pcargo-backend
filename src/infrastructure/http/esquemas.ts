@@ -29,6 +29,8 @@ export const crearEnvioSchema = cotizacionSchema.extend({
   destinatario: z.object({ nombre: texto, telefono: texto, direccion: texto }),
   formaPago: z.enum(FORMAS_PAGO),
   descripcion: z.string().max(500).nullish(),
+  // guía física: texto (admite ceros a la izquierda) o número; el dominio valida el formato
+  numeroGuia: z.union([z.string().max(40), z.number()]).nullish(),
 });
 
 export const cambioEstadoSchema = z.object({

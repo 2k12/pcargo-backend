@@ -47,7 +47,8 @@ export interface GestionEntrega extends Gestion {
 
 export interface EnvioProps {
   id: string;
-  codigo: string;
+  /** Número de la guía física (único). */
+  numeroGuia: number;
   remitente: Contacto;
   destinatario: Destinatario;
   rutaId: number;
@@ -85,7 +86,7 @@ function validarContacto(c: Contacto, rol: string): void {
 export class Envio {
   private constructor(private props: EnvioProps) {}
 
-  static crear(datos: NuevoEnvio, ctx: { id: string; codigo: string; ahora: Date; actor: Actor }): Envio {
+  static crear(datos: NuevoEnvio, ctx: { id: string; numeroGuia: number; ahora: Date; actor: Actor }): Envio {
     validarContacto(datos.remitente, "remitente");
     validarContacto(datos.destinatario, "destinatario");
     if (!datos.destinatario.direccion?.trim()) {
@@ -95,7 +96,7 @@ export class Envio {
     const usuario = { id: ctx.actor.id, nombre: ctx.actor.nombre };
     return new Envio({
       id: ctx.id,
-      codigo: ctx.codigo,
+      numeroGuia: ctx.numeroGuia,
       remitente: { nombre: datos.remitente.nombre.trim(), telefono: datos.remitente.telefono.trim() },
       destinatario: {
         nombre: datos.destinatario.nombre.trim(),
@@ -140,8 +141,8 @@ export class Envio {
   get id(): string {
     return this.props.id;
   }
-  get codigo(): string {
-    return this.props.codigo;
+  get numeroGuia(): number {
+    return this.props.numeroGuia;
   }
   get estado(): EstadoEnvio {
     return this.props.estado;

@@ -36,7 +36,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
         } as Parameters<typeof Envio.crear>[0],
         {
           id: `00000000-0000-4000-b000-${String(n).padStart(12, "0")}`,
-          codigo: `PC-CONT${String(n).padStart(4, "0")}`,
+          numeroGuia: 70000 + n,
           ahora: new Date(Date.UTC(2026, 9, 1, 12, minutos)),
           actor: OPERADOR,
         },
@@ -48,7 +48,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       await repos.envios.guardar(e);
       const leido = await repos.envios.buscarPorId(e.id);
       expect(leido?.toSnapshot()).toMatchObject({
-        codigo: e.codigo,
+        numeroGuia: e.numeroGuia,
         costo: 67.2,
         formaPago: "CONTRATO",
         items: [
@@ -58,8 +58,9 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
         remitente: { nombre: "María Pérez" },
         historial: [{ estado: "REGISTRADO", usuario: { id: OPERADOR.id } }],
       });
-      expect(await repos.envios.existeCodigo(e.codigo)).toBe(true);
-      expect((await repos.envios.buscarPorCodigo(e.codigo))?.id).toBe(e.id);
+      expect(await repos.envios.existeNumeroGuia(e.numeroGuia)).toBe(true);
+      expect((await repos.envios.buscarPorNumeroGuia(e.numeroGuia))?.id).toBe(e.id);
+      expect(await repos.envios.siguienteNumeroGuia()).toBeGreaterThan(e.numeroGuia);
     });
 
     it("persiste solo los eventos nuevos al cambiar de estado", async () => {
@@ -84,6 +85,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       const ids = (await repos.envios.listar()).map((e) => e.id);
       expect(ids.indexOf(b.id)).toBeLessThan(ids.indexOf(a.id));
       expect((await repos.envios.listar({ q: "ROSA" })).map((e) => e.id)).toEqual([b.id]);
+      expect((await repos.envios.listar({ q: String(a.numeroGuia), numeroGuia: a.numeroGuia })).map((e) => e.id)).toEqual([a.id]);
       expect((await repos.envios.listar({ estado: "ENTREGADO" })).map((e) => e.id)).not.toContain(a.id);
       expect((await repos.envios.listar({ rutaId: 11 })).map((e) => e.id)).toEqual(expect.arrayContaining([a.id, b.id]));
     });
@@ -114,7 +116,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
 
     it("devuelve null para envíos inexistentes", async () => {
       expect(await repos.envios.buscarPorId("00000000-0000-4000-8000-0000000fffff")).toBeNull();
-      expect(await repos.envios.existeCodigo("PC-ZZZZZZZZ")).toBe(false);
+      expect(await repos.envios.existeNumeroGuia(999_999_999_999)).toBe(false);
     });
 
     it("gestiona ciudades y las rutas reflejan su nombre y estado", async () => {

@@ -1,4 +1,4 @@
-import { normalizarCodigo } from "../../../domain/envio/CodigoSeguimiento.js";
+import { pareceNumeroGuia, parsearNumeroGuia } from "../../../domain/envio/NumeroGuia.js";
 import { esEstado } from "../../../domain/envio/EstadoEnvio.js";
 import type { Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
@@ -6,6 +6,15 @@ import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, toEventoDTO, type EnvioDTO, type EventoHistorialDTO } from "../../dto/EnvioDTO.js";
 import type { EnvioRepository, FiltroEnvios, RutaRepository } from "../../ports/repositories.js";
 import type { Clock } from "../../ports/services.js";
+
+/** Para búsquedas: un número fuera de rango simplemente no filtra por guía. */
+function parsearNumeroGuiaSeguro(texto: string): number | undefined {
+  try {
+    return parsearNumeroGuia(texto);
+  } catch {
+    return undefined;
+  }
+}
 
 async function rutasPorId(rutas: RutaRepository): Promise<Map<number, Ruta>> {
   return new Map((await rutas.listar()).map((r) => [r.id, r]));
@@ -18,7 +27,10 @@ export class ListarEnvios {
   ) {}
 
   async ejecutar(filtro: FiltroEnvios = {}): Promise<EnvioDTO[]> {
-    const [lista, mapa] = await Promise.all([this.envios.listar(filtro), rutasPorId(this.rutas)]);
+    // Si el texto es un número, también busca la guía exacta sin importar ceros a la izquierda.
+    const q = filtro.q?.trim();
+    const conGuia = q && pareceNumeroGuia(q) ? { ...filtro, numeroGuia: parsearNumeroGuiaSeguro(q) } : filtro;
+    const [lista, mapa] = await Promise.all([this.envios.listar(conGuia), rutasPorId(this.rutas)]);
     return lista.map((e) => toEnvioDTO(e, mapa.get(e.rutaId)));
   }
 }
@@ -54,7 +66,7 @@ export class CambiarEstadoEnvio {
 }
 
 export interface SeguimientoDTO {
-  codigo: string;
+  numeroGuia: number;
   estado: string;
   origen: string;
   destino: string;
@@ -71,13 +83,13 @@ export class ConsultarSeguimiento {
     private readonly rutas: RutaRepository,
   ) {}
 
-  async ejecutar(codigo: string): Promise<SeguimientoDTO> {
-    const envio = await this.envios.buscarPorCodigo(normalizarCodigo(codigo));
-    if (!envio) throw new DomainError("NO_ENCONTRADO", "No existe un envío con ese código");
+  async ejecutar(numeroGuia: string): Promise<SeguimientoDTO> {
+    const envio = await this.envios.buscarPorNumeroGuia(parsearNumeroGuia(numeroGuia));
+    if (!envio) throw new DomainError("NO_ENCONTRADO", "No existe un envío con ese número de guía");
     const ruta = await this.rutas.buscarPorId(envio.rutaId);
     const s = envio.toSnapshot();
     return {
-      codigo: s.codigo,
+      numeroGuia: s.numeroGuia,
       estado: s.estado,
       origen: ruta?.origen.nombre ?? "?",
       destino: ruta?.destino.nombre ?? "?",

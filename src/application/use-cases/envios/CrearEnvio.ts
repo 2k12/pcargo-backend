@@ -1,6 +1,7 @@
 import type { Contacto, Destinatario } from "../../../domain/envio/Envio.js";
 import { Envio } from "../../../domain/envio/Envio.js";
 import { esFormaPago } from "../../../domain/envio/FormaPago.js";
+import { parsearNumeroGuia } from "../../../domain/envio/NumeroGuia.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, type EnvioDTO } from "../../dto/EnvioDTO.js";
@@ -15,9 +16,11 @@ export interface SolicitudEnvio {
   items: ItemSolicitud[];
   formaPago: string;
   descripcion?: string | null;
+  /** Número de la guía física. Vacío → consecutivo automático. */
+  numeroGuia?: string | number | null;
 }
 
-const MAX_INTENTOS_CODIGO = 5;
+const MAX_INTENTOS_GUIA = 5;
 
 export class CrearEnvio {
   constructor(
@@ -45,17 +48,26 @@ export class CrearEnvio {
         formaPago: s.formaPago,
         descripcion: s.descripcion,
       },
-      { id: this.ids.uuid(), codigo: await this.codigoUnico(), ahora: this.clock.ahora(), actor },
+      { id: this.ids.uuid(), numeroGuia: await this.numeroGuia(s.numeroGuia), ahora: this.clock.ahora(), actor },
     );
     await this.envios.guardar(envio);
     return toEnvioDTO(envio, ruta, true);
   }
 
-  private async codigoUnico(): Promise<string> {
-    for (let i = 0; i < MAX_INTENTOS_CODIGO; i++) {
-      const codigo = this.ids.codigoSeguimiento();
-      if (!(await this.envios.existeCodigo(codigo))) return codigo;
+  /** Usa el número de la guía física si se indicó; si no, asigna el consecutivo siguiente. */
+  private async numeroGuia(indicado: string | number | null | undefined): Promise<number> {
+    const vacio = indicado === undefined || indicado === null || String(indicado).trim() === "";
+    if (!vacio) {
+      const n = parsearNumeroGuia(indicado);
+      if (await this.envios.existeNumeroGuia(n)) {
+        throw new DomainError("CONFLICTO", `La guía ${n} ya está registrada`);
+      }
+      return n;
     }
-    throw new DomainError("CONFLICTO", "No se pudo generar un código de seguimiento único");
+    for (let i = 0; i < MAX_INTENTOS_GUIA; i++) {
+      const n = await this.envios.siguienteNumeroGuia();
+      if (!(await this.envios.existeNumeroGuia(n))) return n;
+    }
+    throw new DomainError("CONFLICTO", "No se pudo asignar un número de guía; intente de nuevo");
   }
 }

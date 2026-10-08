@@ -15,6 +15,7 @@ import type { EstadoEnvio } from "../../../domain/envio/EstadoEnvio.js";
 import type { FormaPago } from "../../../domain/envio/FormaPago.js";
 import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
 import type { Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
+import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Db } from "./pool.js";
 
 export class PgUsuarioRepository implements UsuarioRepository {
@@ -178,7 +179,7 @@ export class PgRutaRepository implements RutaRepository {
 
 interface EnvioRow {
   id: string;
-  codigo: string;
+  numero_guia: number;
   remitente_nombre: string;
   remitente_telefono: string;
   destinatario_nombre: string;
@@ -222,14 +223,14 @@ export class PgEnvioRepository implements EnvioRepository {
     try {
       await client.query("BEGIN");
       const upsert = await client.query<{ nuevo: boolean }>(
-        `INSERT INTO envios (id, codigo, remitente_nombre, remitente_telefono, destinatario_nombre,
+        `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,
             destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, descripcion,
             costo, forma_pago, estado, creado_por, creado_en, actualizado_en)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en
          RETURNING (xmax = 0) AS nuevo`,
         [
-          s.id, s.codigo, s.remitente.nombre, s.remitente.telefono, s.destinatario.nombre,
+          s.id, s.numeroGuia, s.remitente.nombre, s.remitente.telefono, s.destinatario.nombre,
           s.destinatario.telefono, s.destinatario.direccion, s.rutaId, envio.totalPiezas, envio.pesoTotalKg,
           s.descripcion, s.costo, s.formaPago, s.estado, s.creadoPor, s.creadoEn, s.actualizadoEn,
         ],
@@ -256,6 +257,10 @@ export class PgEnvioRepository implements EnvioRepository {
       await client.query("COMMIT");
     } catch (e) {
       await client.query("ROLLBACK");
+      // Carrera entre dos registros con el mismo número de guía: la restricción UNIQUE decide.
+      if ((e as { code?: string; constraint?: string }).code === "23505" && (e as { constraint?: string }).constraint === "envios_numero_guia_key") {
+        throw new DomainError("CONFLICTO", `La guía ${s.numeroGuia} ya está registrada`);
+      }
       throw e;
     } finally {
       client.release();
@@ -266,13 +271,18 @@ export class PgEnvioRepository implements EnvioRepository {
     return (await this.consultar("WHERE e.id = $1", [id]))[0] ?? null;
   }
 
-  async buscarPorCodigo(codigo: string): Promise<Envio | null> {
-    return (await this.consultar("WHERE e.codigo = $1", [codigo]))[0] ?? null;
+  async buscarPorNumeroGuia(numeroGuia: number): Promise<Envio | null> {
+    return (await this.consultar("WHERE e.numero_guia = $1", [numeroGuia]))[0] ?? null;
   }
 
-  async existeCodigo(codigo: string): Promise<boolean> {
-    const { rowCount } = await this.db.query("SELECT 1 FROM envios WHERE codigo = $1", [codigo]);
+  async existeNumeroGuia(numeroGuia: number): Promise<boolean> {
+    const { rowCount } = await this.db.query("SELECT 1 FROM envios WHERE numero_guia = $1", [numeroGuia]);
     return (rowCount ?? 0) > 0;
+  }
+
+  async siguienteNumeroGuia(): Promise<number> {
+    const { rows } = await this.db.query<{ n: number }>("SELECT COALESCE(MAX(numero_guia), 0) + 1 AS n FROM envios");
+    return Number(rows[0]!.n);
   }
 
   async listar(f: FiltroEnvios = {}): Promise<Envio[]> {
@@ -283,7 +293,8 @@ export class PgEnvioRepository implements EnvioRepository {
     if (f.formaPago) cond.push(`e.forma_pago = $${params.push(f.formaPago)}`);
     if (f.q?.trim()) {
       const i = params.push(`%${f.q.trim()}%`);
-      cond.push(`(e.codigo ILIKE $${i} OR e.remitente_nombre ILIKE $${i} OR e.destinatario_nombre ILIKE $${i})`);
+      const porGuia = f.numeroGuia ? `e.numero_guia = $${params.push(f.numeroGuia)} OR ` : "";
+      cond.push(`(${porGuia}e.remitente_nombre ILIKE $${i} OR e.destinatario_nombre ILIKE $${i})`);
     }
     return this.consultar(cond.length ? `WHERE ${cond.join(" AND ")}` : "", params);
   }
@@ -332,7 +343,7 @@ export class PgEnvioRepository implements EnvioRepository {
     return rows.map((r) =>
       Envio.reconstruir({
         id: r.id,
-        codigo: r.codigo,
+        numeroGuia: Number(r.numero_guia),
         remitente: { nombre: r.remitente_nombre, telefono: r.remitente_telefono },
         destinatario: {
           nombre: r.destinatario_nombre,
