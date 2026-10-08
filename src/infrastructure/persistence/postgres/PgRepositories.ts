@@ -181,6 +181,7 @@ export class PgRutaRepository implements RutaRepository {
 interface EnvioRow {
   id: string;
   numero_guia: number;
+  cliente_id: string | null;
   remitente_nombre: string;
   remitente_telefono: string;
   destinatario_nombre: string;
@@ -226,14 +227,15 @@ export class PgEnvioRepository implements EnvioRepository {
       const upsert = await client.query<{ nuevo: boolean }>(
         `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,
             destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, descripcion,
-            costo, forma_pago, estado, creado_por, creado_en, actualizado_en)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            costo, forma_pago, estado, creado_por, creado_en, actualizado_en, cliente_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en
          RETURNING (xmax = 0) AS nuevo`,
         [
           s.id, s.numeroGuia, s.remitente.nombre, s.remitente.telefono, s.destinatario.nombre,
           s.destinatario.telefono, s.destinatario.direccion, s.rutaId, envio.totalPiezas, envio.pesoTotalKg,
           s.descripcion, s.costo, s.formaPago, s.estado, s.creadoPor, s.creadoEn, s.actualizadoEn,
+          s.clienteId ?? null,
         ],
       );
       if (upsert.rows[0]?.nuevo) {
@@ -306,6 +308,7 @@ export class PgEnvioRepository implements EnvioRepository {
     if (f.estado) cond.push(`e.estado = $${params.push(f.estado)}`);
     if (f.rutaId) cond.push(`e.ruta_id = $${params.push(f.rutaId)}`);
     if (f.formaPago) cond.push(`e.forma_pago = $${params.push(f.formaPago)}`);
+    if (f.clienteId) cond.push(`e.cliente_id = $${params.push(f.clienteId)}`);
     if (f.q?.trim()) {
       const i = params.push(`%${f.q.trim()}%`);
       const porGuia = f.numeroGuia ? `e.numero_guia = $${params.push(f.numeroGuia)} OR ` : "";
@@ -366,6 +369,7 @@ export class PgEnvioRepository implements EnvioRepository {
       Envio.reconstruir({
         id: r.id,
         numeroGuia: Number(r.numero_guia),
+        clienteId: r.cliente_id,
         remitente: { nombre: r.remitente_nombre, telefono: r.remitente_telefono },
         destinatario: {
           nombre: r.destinatario_nombre,

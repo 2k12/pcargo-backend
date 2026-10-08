@@ -49,6 +49,8 @@ export interface EnvioProps {
   id: string;
   /** Número de la guía física (único). */
   numeroGuia: number;
+  /** Cliente frecuente que envía (y normalmente paga); null si es ocasional. */
+  clienteId?: string | null;
   remitente: Contacto;
   destinatario: Destinatario;
   rutaId: number;
@@ -71,6 +73,7 @@ export interface NuevoEnvio {
   items: ItemEnvio[];
   formaPago: FormaPago;
   descripcion?: string | null;
+  clienteId?: string | null;
 }
 
 const TELEFONO = /^\+?[0-9 ]{7,15}$/;
@@ -97,6 +100,7 @@ export class Envio {
     return new Envio({
       id: ctx.id,
       numeroGuia: ctx.numeroGuia,
+      clienteId: datos.clienteId ?? null,
       remitente: { nombre: datos.remitente.nombre.trim(), telefono: datos.remitente.telefono.trim() },
       destinatario: {
         nombre: datos.destinatario.nombre.trim(),
@@ -146,6 +150,9 @@ export class Envio {
   }
   get estado(): EstadoEnvio {
     return this.props.estado;
+  }
+  get clienteId(): string | null {
+    return this.props.clienteId ?? null;
   }
   get rutaId(): number {
     return this.props.rutaId;

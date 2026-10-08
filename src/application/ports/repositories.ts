@@ -1,4 +1,5 @@
 import type { TipoCarga, TipoCargaCodigo } from "../../domain/carga/TipoCarga.js";
+import type { Cliente, DatosCliente } from "../../domain/cliente/Cliente.js";
 import type { Envio } from "../../domain/envio/Envio.js";
 import type { EstadoEnvio } from "../../domain/envio/EstadoEnvio.js";
 import type { FormaPago } from "../../domain/envio/FormaPago.js";
@@ -60,6 +61,7 @@ export interface FiltroEnvios {
   estado?: EstadoEnvio;
   rutaId?: number;
   formaPago?: FormaPago;
+  clienteId?: string;
   /** Número de guía exacto (se combina con `q` mediante OR). */
   numeroGuia?: number;
   /** Busca en remitente y destinatario (sin distinguir mayúsculas). */
@@ -83,4 +85,16 @@ export interface EnvioRepository {
   listar(filtro?: FiltroEnvios): Promise<Envio[]>;
   /** Una página de resultados (más recientes primero, orden estable) y el total que cumple el filtro. */
   listarPagina(filtro: FiltroEnvios, paginacion: Paginacion): Promise<{ envios: Envio[]; total: number }>;
+}
+
+export interface ClienteRepository {
+  /** Ordenados por nombre; `q` busca en nombre y teléfono (sin distinguir mayúsculas). */
+  listar(filtro?: { q?: string }): Promise<Cliente[]>;
+  buscarPorId(id: string): Promise<Cliente | null>;
+  /** Compara solo los dígitos; `excluirId` permite editar un cliente sin cambiar su teléfono. */
+  buscarPorTelefono(telefono: string, excluirId?: string): Promise<Cliente | null>;
+  crear(cliente: Cliente): Promise<void>;
+  actualizar(id: string, datos: Required<DatosCliente>): Promise<Cliente>;
+  /** Los envíos del cliente se conservan sin cliente asociado. */
+  eliminar(id: string): Promise<void>;
 }

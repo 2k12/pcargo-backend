@@ -132,7 +132,116 @@ describe("Estados, consultas y seguimiento", () => {
       { formaPago: "CONTRATO", envios: 0, monto: 0 },
       { formaPago: "SEGURO", envios: 0, monto: 0 },
     ]);
-    expect(r.porRuta).toEqual([{ ruta: "Ibarra → Quito", total: 3 }]);
+    expect(r.porRuta).toEqual([{ rutaId: 11, ruta: "Ibarra → Quito", total: 3, monto: 12 }]);
+    expect(r.porCobrar).toBe(12);
+    expect(r.porCliente).toEqual([{ clienteId: null, nombre: "Sin cliente registrado", envios: 3, monto: 12 }]);
+  });
+
+  it("filtra por cliente y periodo, con serie diaria continua en hora de Ecuador", async () => {
+    const tienda = await c.crearCliente.ejecutar({ nombre: "Tienda La Esquina", telefono: "062 950 111" });
+    // 2026-10-01T12:00Z = 07:00 en Ecuador
+    await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ clienteId: tienda.id }));
+    clock.avanzar(2 * 24 * 60); // 2026-10-03
+    await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ clienteId: tienda.id, ...item("SOBRE", 0.1) }));
+    await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ remitente: { nombre: "Otro", telefono: "0980000000" } }));
+
+    const delCliente = await c.resumen.ejecutar({ clienteId: tienda.id });
+    expect(delCliente).toMatchObject({ totalEnvios: 2, ingresos: 14.9 });
+    expect(delCliente.porCliente).toEqual([{ clienteId: tienda.id, nombre: "Tienda La Esquina", envios: 2, monto: 14.9 }]);
+    expect(delCliente.porDia).toEqual([
+      { fecha: "2026-10-01", envios: 1, ingresos: 8.9 },
+      { fecha: "2026-10-02", envios: 0, ingresos: 0 },
+      { fecha: "2026-10-03", envios: 1, ingresos: 6 },
+    ]);
+
+    const dia3 = await c.resumen.ejecutar({ desde: "2026-10-03", hasta: "2026-10-03" });
+    expect(dia3.totalEnvios).toBe(2);
+    expect(dia3.porCliente.map((p) => p.clienteId).sort()).toEqual([tienda.id, null].sort());
+    expect(dia3.porDia).toEqual([{ fecha: "2026-10-03", envios: 2, ingresos: 14.9 }]);
+
+    await expect(c.resumen.ejecutar({ desde: "03/10/2026" })).rejects.toMatchObject({ code: "VALIDACION" });
+    await expect(c.resumen.ejecutar({ desde: "2026-10-05", hasta: "2026-10-01" })).rejects.toMatchObject({
+      code: "VALIDACION",
+    });
+  });
+});
+
+describe("Clientes frecuentes", () => {
+  it("registra, busca por nombre o teléfono, edita y elimina", async () => {
+    const a = await c.crearCliente.ejecutar({
+      nombre: "  Ferretería   Imbabura ",
+      telefono: "06-295-0222",
+      direccion: " Av. Mariano Acosta ",
+    });
+    expect(a).toMatchObject({
+      nombre: "Ferretería Imbabura",
+      telefono: "06 295 0222",
+      direccion: "Av. Mariano Acosta",
+      notas: null,
+      envios: 0,
+      monto: 0,
+    });
+    await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991112233" });
+
+    expect((await c.listarClientes.ejecutar()).map((x) => x.nombre)).toEqual(["Ana López", "Ferretería Imbabura"]);
+    expect((await c.listarClientes.ejecutar({ q: "ferre" })).map((x) => x.id)).toEqual([a.id]);
+    expect((await c.listarClientes.ejecutar({ q: "0222" })).map((x) => x.id)).toEqual([a.id]);
+
+    const editado = await c.actualizarCliente.ejecutar(a.id, { notas: "Paga a fin de mes" });
+    expect(editado).toMatchObject({ nombre: "Ferretería Imbabura", notas: "Paga a fin de mes" });
+
+    await c.eliminarCliente.ejecutar(a.id);
+    expect(await c.listarClientes.ejecutar()).toHaveLength(1);
+    await expect(c.eliminarCliente.ejecutar(a.id)).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+  });
+
+  it("no admite dos clientes con el mismo teléfono ni datos inválidos", async () => {
+    const a = await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991112233" });
+    const b = await c.crearCliente.ejecutar({ nombre: "Luis Mora", telefono: "0994445566" });
+    const conflicto = { code: "CONFLICTO" };
+    await expect(c.crearCliente.ejecutar({ nombre: "Otra Ana", telefono: "099 111 2233" })).rejects.toMatchObject(conflicto);
+    await expect(c.actualizarCliente.ejecutar(b.id, { telefono: "0991112233" })).rejects.toMatchObject(conflicto);
+    await expect(c.actualizarCliente.ejecutar(a.id, { telefono: "099 111 2233" })).resolves.toMatchObject({
+      telefono: "099 111 2233",
+    });
+    const invalido = { code: "VALIDACION" };
+    await expect(c.crearCliente.ejecutar({ nombre: "X", telefono: "0991112299" })).rejects.toMatchObject(invalido);
+    await expect(c.crearCliente.ejecutar({ nombre: "Sin teléfono", telefono: "12" })).rejects.toMatchObject(invalido);
+  });
+
+  it("asocia envíos al cliente: elegido, guardado al vuelo o reconocido por su teléfono", async () => {
+    const tienda = await c.crearCliente.ejecutar({ nombre: "Tienda La Esquina", telefono: "062950111" });
+    const elegido = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ clienteId: tienda.id }));
+    expect(elegido.clienteId).toBe(tienda.id);
+
+    const nuevo = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true }));
+    const maria = (await c.listarClientes.ejecutar()).find((x) => x.nombre === "María Pérez")!;
+    expect(nuevo.clienteId).toBe(maria.id);
+
+    // Mismo teléfono: se reconoce sin duplicar, aunque no se pida guardarlo
+    const otraVez = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
+    const deNuevo = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guardarCliente: true }));
+    expect([otraVez.clienteId, deNuevo.clienteId]).toEqual([maria.id, maria.id]);
+    expect(await c.listarClientes.ejecutar()).toHaveLength(2);
+
+    const ocasional = await c.crearEnvio.ejecutar(
+      OPERADOR,
+      solicitudEnvio({ remitente: { nombre: "Pedro", telefono: "0970000000" } }),
+    );
+    expect(ocasional.clienteId).toBeNull();
+
+    expect((await c.listarClientes.ejecutar()).find((x) => x.id === maria.id)).toMatchObject({ envios: 3, monto: 26.7 });
+    expect((await c.listarEnvios.ejecutar({ clienteId: tienda.id })).datos.map((e) => e.id)).toEqual([elegido.id]);
+
+    await expect(
+      c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ clienteId: "00000000-0000-4000-8000-000000000999" })),
+    ).rejects.toMatchObject({ code: "VALIDACION" });
+  });
+
+  it("no da de alta al cliente si el envío es inválido", async () => {
+    const invalido = solicitudEnvio({ guardarCliente: true, destinatario: { nombre: "", telefono: "1", direccion: "" } });
+    await expect(c.crearEnvio.ejecutar(OPERADOR, invalido)).rejects.toMatchObject({ code: "VALIDACION" });
+    expect(await c.listarClientes.ejecutar()).toEqual([]);
   });
 });
 

@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { CiudadRepository, EnvioRepository, RutaRepository } from "../../src/application/ports/repositories.js";
+import type {
+  CiudadRepository,
+  ClienteRepository,
+  EnvioRepository,
+  RutaRepository,
+} from "../../src/application/ports/repositories.js";
 import { Envio } from "../../src/domain/envio/Envio.js";
 import { OPERADOR, solicitudEnvio } from "./fakes.js";
 
@@ -7,6 +12,7 @@ export interface FabricaRepos {
   envios: EnvioRepository;
   rutas: RutaRepository;
   ciudades: CiudadRepository;
+  clientes: ClienteRepository;
 }
 
 /**
@@ -129,6 +135,36 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect((await repos.envios.listar({ formaPago: "CONTRATO" })).map((x) => x.id)).toContain(e.id);
       expect((await repos.envios.listar({ formaPago: "SEGURO" })).map((x) => x.id)).not.toContain(e.id);
       expect((await repos.envios.listar({ estado: "NOVEDAD" })).map((x) => x.id)).toEqual([e.id]);
+    });
+
+    it("guarda clientes, los encuentra por teléfono y filtra envíos por cliente", async () => {
+      const id = "00000000-0000-4000-c000-000000000001";
+      const creadoEn = new Date(Date.UTC(2026, 9, 1));
+      await repos.clientes.crear({ id, nombre: "Tienda La Esquina", telefono: "062 950 111", direccion: null, notas: null, creadoEn });
+      expect(await repos.clientes.buscarPorTelefono("062950111")).toMatchObject({ id, nombre: "Tienda La Esquina" });
+      expect(await repos.clientes.buscarPorTelefono("062950111", id)).toBeNull();
+      expect((await repos.clientes.listar({ q: "esquina" })).map((c) => c.id)).toEqual([id]);
+      expect((await repos.clientes.listar({ q: "950" })).map((c) => c.id)).toEqual([id]);
+      expect(await repos.clientes.listar({ q: "nadie" })).toEqual([]);
+
+      const actualizado = await repos.clientes.actualizar(id, {
+        nombre: "Tienda Esquina",
+        telefono: "062 950 111",
+        direccion: "Bolívar 3-20",
+        notas: null,
+      });
+      expect(actualizado).toMatchObject({ nombre: "Tienda Esquina", direccion: "Bolívar 3-20" });
+
+      const delCliente = nuevoEnvio(0, { clienteId: id });
+      await repos.envios.guardar(delCliente);
+      await repos.envios.guardar(nuevoEnvio(1));
+      expect((await repos.envios.listar({ clienteId: id })).map((e) => e.id)).toEqual([delCliente.id]);
+      expect((await repos.envios.buscarPorId(delCliente.id))?.clienteId).toBe(id);
+
+      // Al eliminar el cliente, su envío se conserva
+      await repos.clientes.eliminar(id);
+      expect(await repos.clientes.buscarPorId(id)).toBeNull();
+      expect(await repos.envios.buscarPorId(delCliente.id)).not.toBeNull();
     });
 
     it("devuelve null para envíos inexistentes", async () => {

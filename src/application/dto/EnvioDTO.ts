@@ -21,6 +21,7 @@ export interface GestionEntregaDTO extends GestionDTO {
 export interface EnvioDTO {
   id: string;
   numeroGuia: number;
+  clienteId: string | null;
   remitente: { nombre: string; telefono: string };
   destinatario: { nombre: string; telefono: string; direccion: string };
   ruta: { id: number; origen: string; destino: string };
@@ -51,6 +52,7 @@ export function toEnvioDTO(envio: Envio, ruta: Ruta | undefined, conHistorial = 
   return {
     id: s.id,
     numeroGuia: s.numeroGuia,
+    clienteId: s.clienteId ?? null,
     remitente: s.remitente,
     destinatario: s.destinatario,
     ruta: { id: s.rutaId, origen: ruta?.origen.nombre ?? "?", destino: ruta?.destino.nombre ?? "?" },

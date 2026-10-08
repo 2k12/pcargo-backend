@@ -1,6 +1,7 @@
 import type { Cache, LimitadorTasa } from "../application/ports/cache.js";
 import type {
   CiudadRepository,
+  ClienteRepository,
   EnvioRepository,
   RutaRepository,
   TipoCargaRepository,
@@ -16,6 +17,12 @@ import {
   ListarCiudades,
   ListarTiposCarga,
 } from "../application/use-cases/catalogo/Catalogo.js";
+import {
+  ActualizarCliente,
+  CrearCliente,
+  EliminarCliente,
+  ListarClientes,
+} from "../application/use-cases/clientes/Clientes.js";
 import { ObtenerCatalogoPublico } from "../application/use-cases/catalogo/CatalogoPublico.js";
 import { ObtenerResumen } from "../application/use-cases/dashboard/ObtenerResumen.js";
 import {
@@ -46,6 +53,8 @@ import {
   InMemoryTipoCargaRepository,
   InMemoryUsuarioRepository,
 } from "./persistence/memory/InMemoryRepositories.js";
+import { InMemoryClienteRepository } from "./persistence/memory/InMemoryClienteRepository.js";
+import { PgClienteRepository } from "./persistence/postgres/PgClienteRepository.js";
 import {
   PgCiudadRepository,
   PgEnvioRepository,
@@ -64,6 +73,7 @@ export interface Adaptadores {
   tiposCarga: TipoCargaRepository;
   rutas: RutaRepository;
   envios: EnvioRepository;
+  clientes: ClienteRepository;
   hasher: PasswordHasher;
   tokens: TokenService;
   clock: Clock;
@@ -106,7 +116,12 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache()) {
     crearRuta: invalidaTras(new CrearRuta(rutas, a.ciudades), cache, trasCambioCatalogo),
     actualizarRuta: invalidaTras(new ActualizarRuta(rutas), cache, trasCambioCatalogo),
     cotizar,
-    crearEnvio: invalidaTras(new CrearEnvio(a.envios, cotizar, a.ids, a.clock), cache, [ESPACIOS.dashboard]),
+    crearEnvio: invalidaTras(new CrearEnvio(a.envios, cotizar, a.ids, a.clock, a.clientes), cache, [ESPACIOS.dashboard]),
+    // Los nombres de clientes aparecen en el resumen: sus escrituras invalidan el dashboard.
+    listarClientes: new ListarClientes(a.clientes, a.envios),
+    crearCliente: invalidaTras(new CrearCliente(a.clientes, a.ids, a.clock), cache, [ESPACIOS.dashboard]),
+    actualizarCliente: invalidaTras(new ActualizarCliente(a.clientes, a.envios), cache, [ESPACIOS.dashboard]),
+    eliminarCliente: invalidaTras(new EliminarCliente(a.clientes), cache, [ESPACIOS.dashboard]),
     listarEnvios: new ListarEnvios(a.envios, rutas),
     obtenerEnvio: new ObtenerEnvio(a.envios, rutas),
     cambiarEstado: invalidaTras(new CambiarEstadoEnvio(a.envios, rutas, a.clock), cache, [
@@ -117,8 +132,8 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache()) {
       clave: (guia) => `${ESPACIOS.seguimiento}${claveGuia(guia)}`,
       ttlSeg: TTL.seguimiento,
     }),
-    resumen: conCache(new ObtenerResumen(a.envios, rutas), cache, {
-      clave: () => `${ESPACIOS.dashboard}resumen`,
+    resumen: conCache(new ObtenerResumen(a.envios, rutas, a.clientes, a.clock), cache, {
+      clave: (f) => `${ESPACIOS.dashboard}resumen:${f?.clienteId ?? "todos"}:${f?.desde ?? ""}:${f?.hasta ?? ""}`,
       ttlSeg: TTL.dashboard,
     }),
   };
@@ -145,6 +160,7 @@ export async function adaptadoresEnMemoria(
     tiposCarga: new InMemoryTipoCargaRepository(),
     rutas: new InMemoryRutaRepository(ciudades),
     envios: new InMemoryEnvioRepository(),
+    clientes: new InMemoryClienteRepository(),
     hasher,
     tokens: new JwtTokenService(opciones.jwtSecret),
     clock: new SystemClock(),
@@ -160,6 +176,7 @@ export function adaptadoresPostgres(db: Db, config: Pick<Config, "JWT_SECRET" | 
     tiposCarga: new PgTipoCargaRepository(db),
     rutas: new PgRutaRepository(db),
     envios: new PgEnvioRepository(db),
+    clientes: new PgClienteRepository(db),
     hasher: new BcryptPasswordHasher(),
     tokens: new JwtTokenService(config.JWT_SECRET, config.JWT_EXPIRES_IN),
     clock: new SystemClock(),

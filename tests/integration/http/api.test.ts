@@ -266,4 +266,54 @@ describe("Flujo de un envío", () => {
     await request(app).get("/api/seguimiento/987654321").expect(404);
     await request(app).get("/api/seguimiento/PC-NOEXISTE").expect(400);
   });
+
+  it("CRUD de clientes, envío con cliente y resumen filtrado por cliente", async () => {
+    await request(app).get("/api/clientes").expect(401);
+    const creado = await request(app)
+      .post("/api/clientes")
+      .set(auth(tokenOperador))
+      .send({ nombre: "Comercial Otavalo", telefono: "062 920 333", direccion: "Sucre y Calderón" })
+      .expect(201);
+    expect(creado.body).toMatchObject({ nombre: "Comercial Otavalo", envios: 0, monto: 0, ultimoEnvio: null });
+    const id = creado.body.id as string;
+    const dup = await request(app)
+      .post("/api/clientes")
+      .set(auth(tokenOperador))
+      .send({ nombre: "Otro", telefono: "062920333" })
+      .expect(409);
+    expect(dup.body.error.code).toBe("CONFLICTO");
+    await request(app).post("/api/clientes").set(auth(tokenOperador)).send({ nombre: "Sin tel" }).expect(400);
+
+    const envio = await request(app)
+      .post("/api/envios")
+      .set(auth(tokenOperador))
+      .send(solicitudEnvio({ clienteId: id }))
+      .expect(201);
+    expect(envio.body.clienteId).toBe(id);
+
+    const lista = await request(app).get("/api/clientes?q=otavalo").set(auth(tokenOperador)).expect(200);
+    expect(lista.body).toHaveLength(1);
+    expect(lista.body[0]).toMatchObject({ envios: 1, monto: envio.body.costo });
+
+    const porCliente = await request(app).get(`/api/envios?clienteId=${id}`).set(auth(tokenOperador)).expect(200);
+    expect(porCliente.body.datos.map((e: { id: string }) => e.id)).toEqual([envio.body.id]);
+
+    const resumen = await request(app).get(`/api/dashboard/resumen?clienteId=${id}`).set(auth(tokenOperador)).expect(200);
+    expect(resumen.body).toMatchObject({ totalEnvios: 1, ingresos: envio.body.costo });
+    expect(resumen.body.porCliente[0]).toMatchObject({ clienteId: id, nombre: "Comercial Otavalo" });
+    await request(app).get("/api/dashboard/resumen?clienteId=no-uuid").set(auth(tokenOperador)).expect(400);
+    await request(app).get("/api/dashboard/resumen?desde=ayer").set(auth(tokenOperador)).expect(400);
+
+    const editado = await request(app)
+      .patch(`/api/clientes/${id}`)
+      .set(auth(tokenOperador))
+      .send({ notas: "Mayorista" })
+      .expect(200);
+    expect(editado.body).toMatchObject({ notas: "Mayorista", envios: 1 });
+    await request(app).patch(`/api/clientes/${id}`).set(auth(tokenOperador)).send({}).expect(400);
+
+    await request(app).delete(`/api/clientes/${id}`).set(auth(tokenOperador)).expect(204);
+    await request(app).delete(`/api/clientes/${id}`).set(auth(tokenOperador)).expect(404);
+    await request(app).get(`/api/envios/${envio.body.id}`).set(auth(tokenOperador)).expect(200);
+  });
 });

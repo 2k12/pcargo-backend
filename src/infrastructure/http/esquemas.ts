@@ -31,6 +31,8 @@ export const crearEnvioSchema = cotizacionSchema.extend({
   descripcion: z.string().max(500).nullish(),
   // guía física: texto (admite ceros a la izquierda) o número; el dominio valida el formato
   numeroGuia: z.union([z.string().max(40), z.number()]).nullish(),
+  clienteId: z.uuid("cliente inválido").nullish(),
+  guardarCliente: z.boolean().optional(),
 });
 
 export const cambioEstadoSchema = z.object({
@@ -42,6 +44,7 @@ export const filtroEnviosSchema = z.object({
   estado: z.enum(ESTADOS).optional(),
   rutaId: z.coerce.number().int().positive().optional(),
   formaPago: z.enum(FORMAS_PAGO).optional(),
+  clienteId: z.uuid("cliente inválido").optional(),
   q: z.string().optional(),
 });
 
@@ -49,6 +52,25 @@ export const paginacionSchema = z.object({
   pagina: z.coerce.number().int().min(1).default(1),
   porPagina: z.coerce.number().int().min(1).max(100).default(20),
 });
+
+export const filtroResumenSchema = z.object({
+  clienteId: z.uuid("cliente inválido").optional(),
+  desde: z.string().optional(),
+  hasta: z.string().optional(),
+});
+
+const opcional = z.string().max(300).nullish();
+
+export const crearClienteSchema = z.object({
+  nombre: z.string().max(200),
+  telefono: z.string().max(40),
+  direccion: opcional,
+  notas: opcional,
+});
+
+export const actualizarClienteSchema = crearClienteSchema
+  .partial()
+  .refine((v) => Object.values(v).some((x) => x !== undefined), "Debe enviar al menos un campo");
 
 export const crearRutaSchema = z.object({
   origenId: z.coerce.number().int().positive(),

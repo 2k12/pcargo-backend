@@ -2,13 +2,16 @@ import { Router } from "express";
 import type { CasosDeUso } from "../container.js";
 import {
   actualizarCiudadSchema,
+  actualizarClienteSchema,
   actualizarRutaSchema,
   cambioEstadoSchema,
   cotizacionSchema,
   crearCiudadSchema,
+  crearClienteSchema,
   crearEnvioSchema,
   crearRutaSchema,
   filtroEnviosSchema,
+  filtroResumenSchema,
   idNumerico,
   idUuid,
   loginSchema,
@@ -87,6 +90,25 @@ export function crearRouter(c: CasosDeUso): Router {
     res.json(await c.actualizarRuta.ejecutar(actorDe(res), id, actualizarRutaSchema.parse(req.body)));
   });
 
+  privado.get("/clientes", async (req, res) => {
+    const q = typeof req.query.q === "string" ? req.query.q : undefined;
+    res.json(await c.listarClientes.ejecutar({ q }));
+  });
+
+  privado.post("/clientes", async (req, res) => {
+    res.status(201).json(await c.crearCliente.ejecutar(crearClienteSchema.parse(req.body)));
+  });
+
+  privado.patch("/clientes/:id", async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    res.json(await c.actualizarCliente.ejecutar(id, actualizarClienteSchema.parse(req.body)));
+  });
+
+  privado.delete("/clientes/:id", async (req, res) => {
+    await c.eliminarCliente.ejecutar(idUuid.parse(req.params.id));
+    res.status(204).end();
+  });
+
   privado.post("/envios/cotizar", async (req, res) => {
     res.json(await c.cotizar.ejecutar(cotizacionSchema.parse(req.body)));
   });
@@ -108,8 +130,8 @@ export function crearRouter(c: CasosDeUso): Router {
     res.json(await c.cambiarEstado.ejecutar(actorDe(res), idUuid.parse(req.params.id), estado, nota));
   });
 
-  privado.get("/dashboard/resumen", async (_req, res) => {
-    res.json(await c.resumen.ejecutar());
+  privado.get("/dashboard/resumen", async (req, res) => {
+    res.json(await c.resumen.ejecutar(filtroResumenSchema.parse(req.query)));
   });
 
   return Router().use(publico).use(privado);
