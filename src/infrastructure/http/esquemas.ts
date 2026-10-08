@@ -45,6 +45,11 @@ export const filtroEnviosSchema = z.object({
   q: z.string().optional(),
 });
 
+export const paginacionSchema = z.object({
+  pagina: z.coerce.number().int().min(1).default(1),
+  porPagina: z.coerce.number().int().min(1).max(100).default(20),
+});
+
 export const crearRutaSchema = z.object({
   origenId: z.coerce.number().int().positive(),
   destinoId: z.coerce.number().int().positive(),

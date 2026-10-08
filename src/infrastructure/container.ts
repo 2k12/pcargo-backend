@@ -1,3 +1,4 @@
+import type { Cache, LimitadorTasa } from "../application/ports/cache.js";
 import type {
   CiudadRepository,
   EnvioRepository,
@@ -26,6 +27,16 @@ import {
 import { CotizarEnvio } from "../application/use-cases/envios/CotizarEnvio.js";
 import { CrearEnvio } from "../application/use-cases/envios/CrearEnvio.js";
 import { ActualizarRuta, CrearRuta, ListarRutas } from "../application/use-cases/rutas/Rutas.js";
+import { MemoryCache, MemoryLimitadorTasa, SinCache } from "./cache/memoria.js";
+import {
+  claveGuia,
+  conCache,
+  ESPACIOS,
+  invalidaTras,
+  RutaRepositoryEnCache,
+  TTL,
+} from "./cache/decoradores.js";
+import { crearClienteRedis, esperarRedis, RedisCache, RedisLimitadorTasa } from "./cache/redis.js";
 import type { Config } from "./config/env.js";
 import {
   ciudadesSemilla,
@@ -59,29 +70,57 @@ export interface Adaptadores {
   ids: IdGenerator;
 }
 
-/** Raíz de composición: conecta los casos de uso con los adaptadores concretos. */
-export function crearCasosDeUso(a: Adaptadores) {
-  const cotizar = new CotizarEnvio(a.rutas, a.tiposCarga);
+/**
+ * Raíz de composición: conecta los casos de uso con los adaptadores concretos.
+ * Con `cache` (Redis o memoria) las lecturas frecuentes se cachean y las escrituras invalidan lo afectado.
+ */
+export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache()) {
+  const rutas = new RutaRepositoryEnCache(a.rutas, cache);
+  const cotizar = new CotizarEnvio(rutas, a.tiposCarga);
+  // Renombrar o desactivar ciudades/rutas cambia nombres y disponibilidad en todas las vistas cacheadas.
+  const trasCambioCatalogo = [ESPACIOS.catalogo, ESPACIOS.dashboard, ESPACIOS.seguimiento];
+  const enCatalogo = (activa?: boolean) => (activa === undefined ? "todas" : String(activa));
   return {
     tokens: a.tokens,
     login: new Login(a.usuarios, a.hasher, a.tokens),
     perfil: new ObtenerPerfil(a.usuarios),
-    listarCiudades: new ListarCiudades(a.ciudades),
-    crearCiudad: new CrearCiudad(a.ciudades),
-    actualizarCiudad: new ActualizarCiudad(a.ciudades),
-    eliminarCiudad: new EliminarCiudad(a.ciudades, a.rutas),
-    listarTiposCarga: new ListarTiposCarga(a.tiposCarga),
-    catalogoPublico: new ObtenerCatalogoPublico(a.ciudades, a.tiposCarga, a.rutas),
-    listarRutas: new ListarRutas(a.rutas),
-    crearRuta: new CrearRuta(a.rutas, a.ciudades),
-    actualizarRuta: new ActualizarRuta(a.rutas),
+    listarCiudades: conCache(new ListarCiudades(a.ciudades), cache, {
+      clave: (f) => `${ESPACIOS.catalogo}ciudades:${enCatalogo(f?.activa)}`,
+      ttlSeg: TTL.catalogo,
+    }),
+    crearCiudad: invalidaTras(new CrearCiudad(a.ciudades), cache, trasCambioCatalogo),
+    actualizarCiudad: invalidaTras(new ActualizarCiudad(a.ciudades), cache, trasCambioCatalogo),
+    eliminarCiudad: invalidaTras(new EliminarCiudad(a.ciudades, rutas), cache, trasCambioCatalogo),
+    listarTiposCarga: conCache(new ListarTiposCarga(a.tiposCarga), cache, {
+      clave: () => `${ESPACIOS.catalogo}tipos-carga`,
+      ttlSeg: TTL.tiposCarga,
+    }),
+    catalogoPublico: conCache(new ObtenerCatalogoPublico(a.ciudades, a.tiposCarga, rutas), cache, {
+      clave: () => `${ESPACIOS.catalogo}publico`,
+      ttlSeg: TTL.catalogo,
+    }),
+    listarRutas: conCache(new ListarRutas(rutas), cache, {
+      clave: (f) => `${ESPACIOS.catalogo}rutas:${enCatalogo(f?.activa)}`,
+      ttlSeg: TTL.catalogo,
+    }),
+    crearRuta: invalidaTras(new CrearRuta(rutas, a.ciudades), cache, trasCambioCatalogo),
+    actualizarRuta: invalidaTras(new ActualizarRuta(rutas), cache, trasCambioCatalogo),
     cotizar,
-    crearEnvio: new CrearEnvio(a.envios, cotizar, a.ids, a.clock),
-    listarEnvios: new ListarEnvios(a.envios, a.rutas),
-    obtenerEnvio: new ObtenerEnvio(a.envios, a.rutas),
-    cambiarEstado: new CambiarEstadoEnvio(a.envios, a.rutas, a.clock),
-    seguimiento: new ConsultarSeguimiento(a.envios, a.rutas),
-    resumen: new ObtenerResumen(a.envios, a.rutas),
+    crearEnvio: invalidaTras(new CrearEnvio(a.envios, cotizar, a.ids, a.clock), cache, [ESPACIOS.dashboard]),
+    listarEnvios: new ListarEnvios(a.envios, rutas),
+    obtenerEnvio: new ObtenerEnvio(a.envios, rutas),
+    cambiarEstado: invalidaTras(new CambiarEstadoEnvio(a.envios, rutas, a.clock), cache, [
+      ESPACIOS.dashboard,
+      ESPACIOS.seguimiento,
+    ]),
+    seguimiento: conCache(new ConsultarSeguimiento(a.envios, rutas), cache, {
+      clave: (guia) => `${ESPACIOS.seguimiento}${claveGuia(guia)}`,
+      ttlSeg: TTL.seguimiento,
+    }),
+    resumen: conCache(new ObtenerResumen(a.envios, rutas), cache, {
+      clave: () => `${ESPACIOS.dashboard}resumen`,
+      ttlSeg: TTL.dashboard,
+    }),
   };
 }
 
@@ -128,10 +167,41 @@ export function adaptadoresPostgres(db: Db, config: Pick<Config, "JWT_SECRET" | 
   };
 }
 
-export async function crearContenedor(config: Config): Promise<{ casos: CasosDeUso; cerrar: () => Promise<void> }> {
+/** Caché y limitador de tasa según `CACHE_DRIVER`. Con Redis se comparten entre todas las instancias de la API. */
+export async function crearCacheYLimitador(config: Pick<Config, "CACHE_DRIVER" | "REDIS_URL">): Promise<{
+  cache: Cache;
+  limitador: LimitadorTasa;
+  cerrar: () => Promise<void>;
+}> {
+  if (config.CACHE_DRIVER === "redis" && config.REDIS_URL) {
+    const redis = crearClienteRedis(config.REDIS_URL);
+    await esperarRedis(redis);
+    return {
+      cache: new RedisCache(redis),
+      limitador: new RedisLimitadorTasa(redis),
+      cerrar: async () => {
+        await redis.quit().catch(() => redis.disconnect());
+      },
+    };
+  }
+  const cache = config.CACHE_DRIVER === "none" ? new SinCache() : new MemoryCache();
+  return { cache, limitador: new MemoryLimitadorTasa(), cerrar: async () => {} };
+}
+
+export async function crearContenedor(
+  config: Config,
+): Promise<{ casos: CasosDeUso; limitador: LimitadorTasa; cerrar: () => Promise<void> }> {
+  const { cache, limitador, cerrar: cerrarCache } = await crearCacheYLimitador(config);
   if (config.DB_DRIVER === "memory") {
-    return { casos: crearCasosDeUso(await adaptadoresEnMemoria({ jwtSecret: config.JWT_SECRET })), cerrar: async () => {} };
+    const adaptadores = await adaptadoresEnMemoria({ jwtSecret: config.JWT_SECRET });
+    return { casos: crearCasosDeUso(adaptadores, cache), limitador, cerrar: cerrarCache };
   }
   const db = crearPool(config.DATABASE_URL);
-  return { casos: crearCasosDeUso(adaptadoresPostgres(db, config)), cerrar: () => db.end() };
+  return {
+    casos: crearCasosDeUso(adaptadoresPostgres(db, config), cache),
+    limitador,
+    cerrar: async () => {
+      await Promise.all([db.end(), cerrarCache()]);
+    },
+  };
 }

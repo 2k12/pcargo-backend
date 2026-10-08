@@ -90,6 +90,23 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect((await repos.envios.listar({ rutaId: 11 })).map((e) => e.id)).toEqual(expect.arrayContaining([a.id, b.id]));
     });
 
+    it("pagina con orden estable y total del filtro", async () => {
+      // Tres envíos con la MISMA fecha: el desempate por id evita repetir o saltar filas entre páginas.
+      const iguales = [nuevoEnvio(50), nuevoEnvio(50), nuevoEnvio(50)];
+      for (const e of iguales) await repos.envios.guardar(e);
+      const filtro = { q: iguales[0]!.toSnapshot().remitente.nombre };
+      const todos = (await repos.envios.listar(filtro)).map((e) => e.id);
+      const p1 = await repos.envios.listarPagina(filtro, { pagina: 1, porPagina: 2 });
+      const p2 = await repos.envios.listarPagina(filtro, { pagina: 2, porPagina: 2 });
+      expect(p1.total).toBe(todos.length);
+      expect(p2.total).toBe(todos.length);
+      expect([...p1.envios, ...p2.envios].map((e) => e.id)).toEqual(todos.slice(0, 4));
+      expect(new Set([...p1.envios, ...p2.envios].map((e) => e.id)).size).toBe(Math.min(4, todos.length));
+      expect(p1.envios[0]?.toSnapshot().items.length).toBeGreaterThan(0);
+      const vacia = await repos.envios.listarPagina({ estado: "CANCELADO", rutaId: 999 }, { pagina: 1, porPagina: 10 });
+      expect(vacia).toEqual({ envios: [], total: 0 });
+    });
+
     it("persiste NO_ENTREGADO/NOVEDAD con motivo, sin duplicar ítems, y filtra por forma de pago", async () => {
       const e = nuevoEnvio(30);
       await repos.envios.guardar(e);

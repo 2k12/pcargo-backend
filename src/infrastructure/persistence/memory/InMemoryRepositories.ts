@@ -4,6 +4,7 @@ import type {
   CiudadRepository,
   EnvioRepository,
   FiltroEnvios,
+  Paginacion,
   NuevaRuta,
   RutaRepository,
   TipoCargaRepository,
@@ -172,6 +173,16 @@ export class InMemoryEnvioRepository implements EnvioRepository {
   }
 
   async listar(filtro: FiltroEnvios = {}): Promise<Envio[]> {
+    return this.filtrar(filtro).map((p) => Envio.reconstruir(p));
+  }
+
+  async listarPagina(filtro: FiltroEnvios, { pagina, porPagina }: Paginacion): Promise<{ envios: Envio[]; total: number }> {
+    const todos = this.filtrar(filtro);
+    const desde = (pagina - 1) * porPagina;
+    return { envios: todos.slice(desde, desde + porPagina).map((p) => Envio.reconstruir(p)), total: todos.length };
+  }
+
+  private filtrar(filtro: FiltroEnvios): EnvioProps[] {
     const q = filtro.q?.trim().toLowerCase();
     return [...this.datos.values()]
       .filter((p) => !filtro.estado || p.estado === filtro.estado)
@@ -183,7 +194,6 @@ export class InMemoryEnvioRepository implements EnvioRepository {
           p.numeroGuia === filtro.numeroGuia ||
           [p.remitente.nombre, p.destinatario.nombre].some((v) => v.toLowerCase().includes(q)),
       )
-      .sort((a, b) => b.creadoEn.getTime() - a.creadoEn.getTime())
-      .map((p) => Envio.reconstruir(p));
+      .sort((a, b) => b.creadoEn.getTime() - a.creadoEn.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   }
 }

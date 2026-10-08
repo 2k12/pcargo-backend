@@ -91,11 +91,27 @@ describe("Estados, consultas y seguimiento", () => {
     const b = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ rutaId: 1, ...item("SOBRE", 0.2), formaPago: "CONTRATO", destinatario: { nombre: "Rosa Cevallos", telefono: "0999999999", direccion: "Sucre 4-5" } }));
     await c.cambiarEstado.ejecutar(OPERADOR, a.id, "CANCELADO");
 
-    expect((await c.listarEnvios.ejecutar()).map((e) => e.id)).toEqual([b.id, a.id]);
-    expect((await c.listarEnvios.ejecutar({ estado: "CANCELADO" })).map((e) => e.id)).toEqual([a.id]);
-    expect((await c.listarEnvios.ejecutar({ rutaId: 1 })).map((e) => e.id)).toEqual([b.id]);
-    expect((await c.listarEnvios.ejecutar({ q: "rosa" })).map((e) => e.id)).toEqual([b.id]);
-    expect((await c.listarEnvios.ejecutar({ q: `00${a.numeroGuia}` })).map((e) => e.id)).toEqual([a.id]);
+    expect((await c.listarEnvios.ejecutar()).datos.map((e) => e.id)).toEqual([b.id, a.id]);
+    expect((await c.listarEnvios.ejecutar({ estado: "CANCELADO" })).datos.map((e) => e.id)).toEqual([a.id]);
+    expect((await c.listarEnvios.ejecutar({ rutaId: 1 })).datos.map((e) => e.id)).toEqual([b.id]);
+    expect((await c.listarEnvios.ejecutar({ q: "rosa" })).datos.map((e) => e.id)).toEqual([b.id]);
+    expect((await c.listarEnvios.ejecutar({ q: `00${a.numeroGuia}` })).datos.map((e) => e.id)).toEqual([a.id]);
+  });
+
+  it("pagina el listado en el servidor y acota el tamaño de página", async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      ids.unshift((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio())).id);
+      clock.avanzar(1);
+    }
+    const p1 = await c.listarEnvios.ejecutar({}, { pagina: 1, porPagina: 2 });
+    const p3 = await c.listarEnvios.ejecutar({}, { pagina: 3, porPagina: 2 });
+    expect(p1).toMatchObject({ pagina: 1, porPagina: 2, total: 5, totalPaginas: 3 });
+    expect(p1.datos.map((e) => e.id)).toEqual(ids.slice(0, 2));
+    expect(p3.datos.map((e) => e.id)).toEqual(ids.slice(4));
+    expect((await c.listarEnvios.ejecutar({}, { pagina: 9, porPagina: 2 })).datos).toEqual([]);
+    expect((await c.listarEnvios.ejecutar({}, { porPagina: 5000 })).porPagina).toBe(100);
+    expect(await c.listarEnvios.ejecutar({ estado: "ENTREGADO" })).toMatchObject({ datos: [], total: 0, totalPaginas: 0 });
   });
 
   it("resume envíos e ingresos excluyendo cancelados", async () => {

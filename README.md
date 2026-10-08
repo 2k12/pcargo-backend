@@ -43,6 +43,20 @@ ciudades ─< rutas >─ ciudades         tipos_carga (SOBRE, PAQUETE, CARTON, V
 ```bash
 pnpm test                       # unitarios + integración HTTP + contrato de repos en memoria
 TEST_DATABASE_URL=postgres://pcargo:pcargo@localhost:5433/pcargo_test pnpm test   # + contrato contra Postgres
+TEST_REDIS_URL=redis://localhost:6380 pnpm test                                   # + caché y límite de tasa con Redis real
 ```
+
+## Redis
+
+`docker compose up -d redis` (puerto 6380) y `REDIS_URL=redis://localhost:6380`. Se usa para:
+
+- **Caché** de lecturas frecuentes: catálogo (ciudades, tipos de carga, rutas, catálogo público; 5 min), resumen del
+  dashboard (60 s) y rastreo público (60 s). Las escrituras invalidan lo afectado al instante; el TTL solo acota el caso
+  en que una invalidación falle.
+- **Límite de tasa** compartido entre instancias: login 10 intentos / 15 min por IP y correo; endpoints públicos
+  (`/publico/*`, `/seguimiento/*`) 60 / min por IP → 429 `DEMASIADAS_SOLICITUDES` con `Retry-After`.
+
+Si Redis cae, la API sigue funcionando sin caché ni límite (falla abierto) y se reconecta sola.
+Sin `REDIS_URL` todo funciona en memoria del proceso (`CACHE_DRIVER=none` desactiva la caché).
 
 Endpoints y tipos: ver `../docs/api-contract.md`.

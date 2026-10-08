@@ -95,7 +95,7 @@ describe("Número de guía", () => {
     await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ numeroGuia: "50-001" })).expect(400);
 
     const lista = await request(app).get("/api/envios?q=0000050001").set(auth(tokenOperador)).expect(200);
-    expect(lista.body.map((e: { numeroGuia: number }) => e.numeroGuia)).toEqual([50001]);
+    expect(lista.body.datos.map((e: { numeroGuia: number }) => e.numeroGuia)).toEqual([50001]);
     await request(app).get("/api/seguimiento/050001").expect(200);
 
     const auto = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio()).expect(201);
@@ -212,7 +212,7 @@ describe("Flujo de un envío", () => {
     expect(seg.body).not.toHaveProperty("destinatario");
 
     const lista = await request(app).get("/api/envios?estado=ENTREGADO").set(auth(tokenOperador)).expect(200);
-    expect(lista.body.map((e: { id: string }) => e.id)).toContain(id);
+    expect(lista.body.datos.map((e: { id: string }) => e.id)).toContain(id);
 
     const resumen = await request(app).get("/api/dashboard/resumen").set(auth(tokenOperador)).expect(200);
     expect(resumen.body.porEstado.ENTREGADO).toBeGreaterThanOrEqual(1);
@@ -247,8 +247,15 @@ describe("Flujo de un envío", () => {
     expect(Date.parse(r.body.entrega.fecha)).not.toBeNaN();
 
     const seguros = await request(app).get("/api/envios?formaPago=SEGURO").set(auth(tokenOperador)).expect(200);
-    expect(seguros.body.map((e: { id: string }) => e.id)).toEqual([body.id]);
+    expect(seguros.body.datos.map((e: { id: string }) => e.id)).toEqual([body.id]);
     await request(app).get("/api/envios?formaPago=TARJETA").set(auth(tokenOperador)).expect(400);
+
+    const pagina = await request(app).get("/api/envios?pagina=1&porPagina=1").set(auth(tokenOperador)).expect(200);
+    expect(pagina.body).toMatchObject({ pagina: 1, porPagina: 1 });
+    expect(pagina.body.datos).toHaveLength(1);
+    expect(pagina.body.totalPaginas).toBe(pagina.body.total);
+    await request(app).get("/api/envios?porPagina=101").set(auth(tokenOperador)).expect(400);
+    await request(app).get("/api/envios?pagina=0").set(auth(tokenOperador)).expect(400);
     await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ formaPago: undefined })).expect(400);
   });
 

@@ -4,6 +4,7 @@ import type {
   CiudadRepository,
   EnvioRepository,
   FiltroEnvios,
+  Paginacion,
   NuevaRuta,
   RutaRepository,
   TipoCargaRepository,
@@ -286,6 +287,20 @@ export class PgEnvioRepository implements EnvioRepository {
   }
 
   async listar(f: FiltroEnvios = {}): Promise<Envio[]> {
+    const { where, params } = this.condiciones(f);
+    return this.consultar(where, params);
+  }
+
+  async listarPagina(f: FiltroEnvios, { pagina, porPagina }: Paginacion): Promise<{ envios: Envio[]; total: number }> {
+    const { where, params } = this.condiciones(f);
+    const [conteo, envios] = await Promise.all([
+      this.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM envios e ${where}`, params),
+      this.consultar(where, params, { limite: porPagina, desde: (pagina - 1) * porPagina }),
+    ]);
+    return { envios, total: conteo.rows[0]!.n };
+  }
+
+  private condiciones(f: FiltroEnvios): { where: string; params: unknown[] } {
     const cond: string[] = [];
     const params: unknown[] = [];
     if (f.estado) cond.push(`e.estado = $${params.push(f.estado)}`);
@@ -296,13 +311,20 @@ export class PgEnvioRepository implements EnvioRepository {
       const porGuia = f.numeroGuia ? `e.numero_guia = $${params.push(f.numeroGuia)} OR ` : "";
       cond.push(`(${porGuia}e.remitente_nombre ILIKE $${i} OR e.destinatario_nombre ILIKE $${i})`);
     }
-    return this.consultar(cond.length ? `WHERE ${cond.join(" AND ")}` : "", params);
+    return { where: cond.length ? `WHERE ${cond.join(" AND ")}` : "", params };
   }
 
-  private async consultar(where: string, params: unknown[]): Promise<Envio[]> {
+  /** `id` desempata envíos con la misma fecha para que las páginas no repitan ni salten filas. */
+  private async consultar(
+    where: string,
+    params: unknown[],
+    pagina?: { limite: number; desde: number },
+  ): Promise<Envio[]> {
+    const p = [...params];
+    const limite = pagina ? ` LIMIT $${p.push(pagina.limite)} OFFSET $${p.push(pagina.desde)}` : "";
     const { rows } = await this.db.query<EnvioRow>(
-      `SELECT e.* FROM envios e ${where} ORDER BY e.creado_en DESC`,
-      params,
+      `SELECT e.* FROM envios e ${where} ORDER BY e.creado_en DESC, e.id DESC${limite}`,
+      p,
     );
     if (rows.length === 0) return [];
     const ids = rows.map((r) => r.id);

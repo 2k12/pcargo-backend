@@ -14,6 +14,7 @@ src/
 │   ├── persistence/ adaptadores de salida: postgres/ (pg + migrar/sembrar) y memory/
 │   ├── security/    bcrypt, JWT
 │   ├── system/      reloj, generador de ids/códigos
+│   ├── cache/       Redis/memoria (puerto application/ports/cache.ts) y decoradores conCache/invalidaTras
 │   └── container.ts raíz de composición
 ├── cli/db.ts        migrate | seed | setup
 └── main.ts
@@ -35,3 +36,7 @@ Regla: `domain` no importa nada externo; `application` solo `domain` + sus puert
 - Nueva persistencia: implementar en memoria y en Postgres y cubrir en `tests/helpers/contrato-repositorios.ts`.
 - Migraciones nuevas: `db/migrations/NNN_descripcion.sql`; no editar migraciones ya aplicadas.
 - Datos semilla en un solo lugar: `src/infrastructure/persistence/seed-data.ts`.
+- Caché: se aplica en `container.ts` envolviendo casos de uso (`conCache` en lecturas, `invalidaTras` en escrituras)
+  por espacios (`catalogo:`, `dashboard:`, `seguimiento:`). Un caso nuevo que cambie datos cacheados debe invalidar
+  su espacio; si una lectura cacheada recibe filtros, inclúyelos en la clave. Redis falla abierto (sin caché ni límite).
+- Listados que pueden crecer: paginar en el servidor (`listarPagina` + `PaginaDTO`), orden estable con desempate por id.

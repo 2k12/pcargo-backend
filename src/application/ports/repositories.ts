@@ -66,6 +66,12 @@ export interface FiltroEnvios {
   q?: string;
 }
 
+export interface Paginacion {
+  /** Empieza en 1. */
+  pagina: number;
+  porPagina: number;
+}
+
 export interface EnvioRepository {
   guardar(envio: Envio): Promise<void>;
   buscarPorId(id: string): Promise<Envio | null>;
@@ -73,5 +79,8 @@ export interface EnvioRepository {
   existeNumeroGuia(numeroGuia: number): Promise<boolean>;
   /** Máximo número de guía registrado + 1 (1 si no hay envíos). */
   siguienteNumeroGuia(): Promise<number>;
+  /** Todos los que cumplen el filtro, más recientes primero (para agregados como el dashboard). */
   listar(filtro?: FiltroEnvios): Promise<Envio[]>;
+  /** Una página de resultados (más recientes primero, orden estable) y el total que cumple el filtro. */
+  listarPagina(filtro: FiltroEnvios, paginacion: Paginacion): Promise<{ envios: Envio[]; total: number }>;
 }

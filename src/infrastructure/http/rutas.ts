@@ -12,6 +12,7 @@ import {
   idNumerico,
   idUuid,
   loginSchema,
+  paginacionSchema,
 } from "./esquemas.js";
 import { actorDe, autenticar } from "./middlewares/auth.js";
 
@@ -91,7 +92,7 @@ export function crearRouter(c: CasosDeUso): Router {
   });
 
   privado.get("/envios", async (req, res) => {
-    res.json(await c.listarEnvios.ejecutar(filtroEnviosSchema.parse(req.query)));
+    res.json(await c.listarEnvios.ejecutar(filtroEnviosSchema.parse(req.query), paginacionSchema.parse(req.query)));
   });
 
   privado.post("/envios", async (req, res) => {

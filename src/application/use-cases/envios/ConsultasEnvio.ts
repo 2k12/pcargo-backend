@@ -4,7 +4,7 @@ import type { Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, toEventoDTO, type EnvioDTO, type EventoHistorialDTO } from "../../dto/EnvioDTO.js";
-import type { EnvioRepository, FiltroEnvios, RutaRepository } from "../../ports/repositories.js";
+import type { EnvioRepository, FiltroEnvios, Paginacion, RutaRepository } from "../../ports/repositories.js";
 import type { Clock } from "../../ports/services.js";
 
 /** Para búsquedas: un número fuera de rango simplemente no filtra por guía. */
@@ -20,18 +20,41 @@ async function rutasPorId(rutas: RutaRepository): Promise<Map<number, Ruta>> {
   return new Map((await rutas.listar()).map((r) => [r.id, r]));
 }
 
+export const POR_PAGINA_DEFECTO = 20;
+export const POR_PAGINA_MAX = 100;
+
+export interface PaginaDTO<T> {
+  datos: T[];
+  pagina: number;
+  porPagina: number;
+  total: number;
+  totalPaginas: number;
+}
+
 export class ListarEnvios {
   constructor(
     private readonly envios: EnvioRepository,
     private readonly rutas: RutaRepository,
   ) {}
 
-  async ejecutar(filtro: FiltroEnvios = {}): Promise<EnvioDTO[]> {
+  /** Paginado en el servidor: solo viaja y se reconstruye la página pedida. */
+  async ejecutar(filtro: FiltroEnvios = {}, paginacion: Partial<Paginacion> = {}): Promise<PaginaDTO<EnvioDTO>> {
+    const porPagina = Math.min(Math.max(1, Math.trunc(paginacion.porPagina ?? POR_PAGINA_DEFECTO)), POR_PAGINA_MAX);
+    const pagina = Math.max(1, Math.trunc(paginacion.pagina ?? 1));
     // Si el texto es un número, también busca la guía exacta sin importar ceros a la izquierda.
     const q = filtro.q?.trim();
     const conGuia = q && pareceNumeroGuia(q) ? { ...filtro, numeroGuia: parsearNumeroGuiaSeguro(q) } : filtro;
-    const [lista, mapa] = await Promise.all([this.envios.listar(conGuia), rutasPorId(this.rutas)]);
-    return lista.map((e) => toEnvioDTO(e, mapa.get(e.rutaId)));
+    const [{ envios, total }, mapa] = await Promise.all([
+      this.envios.listarPagina(conGuia, { pagina, porPagina }),
+      rutasPorId(this.rutas),
+    ]);
+    return {
+      datos: envios.map((e) => toEnvioDTO(e, mapa.get(e.rutaId))),
+      pagina,
+      porPagina,
+      total,
+      totalPaginas: Math.ceil(total / porPagina),
+    };
   }
 }
 
