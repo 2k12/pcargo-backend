@@ -1,13 +1,19 @@
 import { esTipoCarga, type TipoCarga } from "../../../domain/carga/TipoCarga.js";
 import type { Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
-import { calcularTarifa, type Cotizacion } from "../../../domain/tarifa/calcularTarifa.js";
+import { cotizarItems, type Cotizacion } from "../../../domain/tarifa/calcularTarifa.js";
 import type { RutaRepository, TipoCargaRepository } from "../../ports/repositories.js";
+
+export interface ItemSolicitud {
+  tipoCarga: string;
+  cantidad: number;
+  /** Peso por unidad. */
+  pesoKg: number;
+}
 
 export interface SolicitudCotizacion {
   rutaId: number;
-  tipoCarga: string;
-  pesoKg: number;
+  items: ItemSolicitud[];
 }
 
 export class CotizarEnvio {
@@ -21,17 +27,17 @@ export class CotizarEnvio {
   }
 
   /** Reutilizado por CrearEnvio para garantizar que el costo cobrado es el cotizado. */
-  async resolver(s: SolicitudCotizacion): Promise<{ ruta: Ruta; tipo: TipoCarga; cotizacion: Cotizacion }> {
-    if (!esTipoCarga(s.tipoCarga)) {
-      throw new DomainError("VALIDACION", `Tipo de carga desconocido: ${s.tipoCarga}`);
-    }
-    const [ruta, tipo] = await Promise.all([
-      this.rutas.buscarPorId(s.rutaId),
-      this.tipos.buscarPorCodigo(s.tipoCarga),
-    ]);
+  async resolver(s: SolicitudCotizacion): Promise<{ ruta: Ruta; cotizacion: Cotizacion }> {
+    const ruta = await this.rutas.buscarPorId(s.rutaId);
     if (!ruta) throw new DomainError("NO_ENCONTRADO", "Ruta no encontrada");
     if (!ruta.activa) throw new DomainError("RUTA_INACTIVA", "La ruta seleccionada no está operativa");
-    if (!tipo) throw new DomainError("NO_ENCONTRADO", "Tipo de carga no encontrado");
-    return { ruta, tipo, cotizacion: calcularTarifa(ruta.tarifaBase, tipo, s.pesoKg) };
+
+    const catalogo = new Map<string, TipoCarga>((await this.tipos.listar()).map((t) => [t.codigo, t]));
+    const items = s.items.map((i) => {
+      const tipo = esTipoCarga(i.tipoCarga) ? catalogo.get(i.tipoCarga) : undefined;
+      if (!tipo) throw new DomainError("VALIDACION", `Tipo de carga desconocido: ${i.tipoCarga}`);
+      return { tipo, cantidad: i.cantidad, pesoKg: i.pesoKg };
+    });
+    return { ruta, cotizacion: cotizarItems(ruta.tarifaBase, items) };
   }
 }

@@ -25,7 +25,14 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       n++;
       const s = solicitudEnvio(sobre);
       return Envio.crear(
-        { ...s, tipoCarga: "PAQUETE", costo: 8.9 } as Parameters<typeof Envio.crear>[0],
+        {
+          ...s,
+          formaPago: "CONTRATO",
+          items: [
+            { tipoCarga: "PAQUETE", cantidad: 5, pesoKg: 2, costoUnitario: 8.4, subtotal: 42 },
+            { tipoCarga: "CARTON", cantidad: 2, pesoKg: 8, costoUnitario: 12.6, subtotal: 25.2 },
+          ],
+        } as Parameters<typeof Envio.crear>[0],
         {
           id: `00000000-0000-4000-b000-${String(n).padStart(12, "0")}`,
           codigo: `PC-CONT${String(n).padStart(4, "0")}`,
@@ -41,8 +48,12 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       const leido = await repos.envios.buscarPorId(e.id);
       expect(leido?.toSnapshot()).toMatchObject({
         codigo: e.codigo,
-        costo: 8.9,
-        pesoKg: 3,
+        costo: 67.2,
+        formaPago: "CONTRATO",
+        items: [
+          { tipoCarga: "PAQUETE", cantidad: 5, pesoKg: 2, costoUnitario: 8.4, subtotal: 42 },
+          { tipoCarga: "CARTON", cantidad: 2, pesoKg: 8, costoUnitario: 12.6, subtotal: 25.2 },
+        ],
         remitente: { nombre: "María Pérez" },
         historial: [{ estado: "REGISTRADO", usuario: { id: OPERADOR.id } }],
       });
@@ -74,6 +85,30 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect((await repos.envios.listar({ q: "ROSA" })).map((e) => e.id)).toEqual([b.id]);
       expect((await repos.envios.listar({ estado: "ENTREGADO" })).map((e) => e.id)).not.toContain(a.id);
       expect((await repos.envios.listar({ rutaId: 11 })).map((e) => e.id)).toEqual(expect.arrayContaining([a.id, b.id]));
+    });
+
+    it("persiste NO_ENTREGADO/NOVEDAD con motivo, sin duplicar ítems, y filtra por forma de pago", async () => {
+      const e = nuevoEnvio(30);
+      await repos.envios.guardar(e);
+      for (const estado of ["EN_TRANSITO", "EN_REPARTO"] as const) {
+        e.cambiarEstado(estado, { ahora: new Date(Date.UTC(2026, 9, 1, 13)), actor: OPERADOR });
+      }
+      e.cambiarEstado("NO_ENTREGADO", { ahora: new Date(Date.UTC(2026, 9, 1, 14)), actor: OPERADOR, nota: "Nadie en casa" });
+      await repos.envios.guardar(e);
+      e.cambiarEstado("EN_REPARTO", { ahora: new Date(Date.UTC(2026, 9, 2, 9)), actor: OPERADOR });
+      e.cambiarEstado("NOVEDAD", { ahora: new Date(Date.UTC(2026, 9, 2, 10)), actor: OPERADOR, nota: "Paquete mojado" });
+      await repos.envios.guardar(e);
+
+      const leido = (await repos.envios.buscarPorId(e.id))!;
+      expect(leido.estado).toBe("NOVEDAD");
+      expect(leido.totalPiezas).toBe(7);
+      expect(leido.toSnapshot().items).toHaveLength(2);
+      expect(leido.ultimaGestionEntrega).toMatchObject({ resultado: "NOVEDAD", nota: "Paquete mojado", operador: OPERADOR.nombre });
+      expect(leido.registro.operador).toBe(OPERADOR.nombre);
+
+      expect((await repos.envios.listar({ formaPago: "CONTRATO" })).map((x) => x.id)).toContain(e.id);
+      expect((await repos.envios.listar({ formaPago: "SEGURO" })).map((x) => x.id)).not.toContain(e.id);
+      expect((await repos.envios.listar({ estado: "NOVEDAD" })).map((x) => x.id)).toEqual([e.id]);
     });
 
     it("devuelve null para envíos inexistentes", async () => {

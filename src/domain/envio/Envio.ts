@@ -1,7 +1,14 @@
 import type { TipoCargaCodigo } from "../carga/TipoCarga.js";
-import { DomainError } from "../shared/DomainError.js";
+import { DomainError, redondear2 } from "../shared/DomainError.js";
 import type { Actor } from "../usuario/Usuario.js";
-import { puedeTransicionar, type EstadoEnvio } from "./EstadoEnvio.js";
+import {
+  esResultadoEntrega,
+  puedeTransicionar,
+  REQUIEREN_NOTA,
+  type EstadoEnvio,
+  type ResultadoEntrega,
+} from "./EstadoEnvio.js";
+import type { FormaPago } from "./FormaPago.js";
 
 export interface Contacto {
   nombre: string;
@@ -12,11 +19,30 @@ export interface Destinatario extends Contacto {
   direccion: string;
 }
 
+export interface ItemEnvio {
+  tipoCarga: TipoCargaCodigo;
+  cantidad: number;
+  /** Peso por unidad. */
+  pesoKg: number;
+  costoUnitario: number;
+  subtotal: number;
+}
+
 export interface EventoHistorial {
   estado: EstadoEnvio;
   nota: string | null;
   fecha: Date;
   usuario: { id: string; nombre: string } | null;
+}
+
+export interface Gestion {
+  fecha: Date;
+  operador: string | null;
+}
+
+export interface GestionEntrega extends Gestion {
+  resultado: ResultadoEntrega;
+  nota: string | null;
 }
 
 export interface EnvioProps {
@@ -25,8 +51,8 @@ export interface EnvioProps {
   remitente: Contacto;
   destinatario: Destinatario;
   rutaId: number;
-  tipoCarga: TipoCargaCodigo;
-  pesoKg: number;
+  items: ItemEnvio[];
+  formaPago: FormaPago;
   descripcion: string | null;
   costo: number;
   estado: EstadoEnvio;
@@ -40,10 +66,10 @@ export interface NuevoEnvio {
   remitente: Contacto;
   destinatario: Destinatario;
   rutaId: number;
-  tipoCarga: TipoCargaCodigo;
-  pesoKg: number;
+  /** Ítems ya cotizados (costo unitario y subtotal calculados por la tarifa). */
+  items: ItemEnvio[];
+  formaPago: FormaPago;
   descripcion?: string | null;
-  costo: number;
 }
 
 const TELEFONO = /^\+?[0-9 ]{7,15}$/;
@@ -55,19 +81,17 @@ function validarContacto(c: Contacto, rol: string): void {
   }
 }
 
-/** Agregado raíz: una encomienda y su ciclo de vida. */
+/** Agregado raíz: una encomienda (una o varias piezas) y su ciclo de vida. */
 export class Envio {
   private constructor(private props: EnvioProps) {}
 
-  static crear(
-    datos: NuevoEnvio,
-    ctx: { id: string; codigo: string; ahora: Date; actor: Actor },
-  ): Envio {
+  static crear(datos: NuevoEnvio, ctx: { id: string; codigo: string; ahora: Date; actor: Actor }): Envio {
     validarContacto(datos.remitente, "remitente");
     validarContacto(datos.destinatario, "destinatario");
     if (!datos.destinatario.direccion?.trim()) {
       throw new DomainError("VALIDACION", "La dirección de entrega es obligatoria");
     }
+    if (datos.items.length === 0) throw new DomainError("VALIDACION", "El envío debe tener al menos un ítem");
     const usuario = { id: ctx.actor.id, nombre: ctx.actor.nombre };
     return new Envio({
       id: ctx.id,
@@ -79,10 +103,10 @@ export class Envio {
         direccion: datos.destinatario.direccion.trim(),
       },
       rutaId: datos.rutaId,
-      tipoCarga: datos.tipoCarga,
-      pesoKg: datos.pesoKg,
+      items: datos.items.map((i) => ({ ...i })),
+      formaPago: datos.formaPago,
       descripcion: datos.descripcion?.trim() || null,
-      costo: datos.costo,
+      costo: redondear2(datos.items.reduce((s, i) => s + i.subtotal, 0)),
       estado: "REGISTRADO",
       creadoPor: ctx.actor.id,
       creadoEn: ctx.ahora,
@@ -92,21 +116,22 @@ export class Envio {
   }
 
   static reconstruir(props: EnvioProps): Envio {
-    return new Envio({ ...props, historial: [...props.historial] });
+    return new Envio({ ...props, items: [...props.items], historial: [...props.historial] });
   }
 
   cambiarEstado(nuevo: EstadoEnvio, ctx: { ahora: Date; actor: Actor; nota?: string | null }): void {
     if (!puedeTransicionar(this.props.estado, nuevo)) {
-      throw new DomainError(
-        "TRANSICION_INVALIDA",
-        `No se puede pasar de ${this.props.estado} a ${nuevo}`,
-      );
+      throw new DomainError("TRANSICION_INVALIDA", `No se puede pasar de ${this.props.estado} a ${nuevo}`);
+    }
+    const nota = ctx.nota?.trim() || null;
+    if (REQUIEREN_NOTA.includes(nuevo) && !nota) {
+      throw new DomainError("VALIDACION", `Debe indicar el motivo para marcar ${nuevo}`);
     }
     this.props.estado = nuevo;
     this.props.actualizadoEn = ctx.ahora;
     this.props.historial.push({
       estado: nuevo,
-      nota: ctx.nota?.trim() || null,
+      nota,
       fecha: ctx.ahora,
       usuario: { id: ctx.actor.id, nombre: ctx.actor.nombre },
     });
@@ -127,8 +152,31 @@ export class Envio {
   get historial(): readonly EventoHistorial[] {
     return this.props.historial;
   }
+  get totalPiezas(): number {
+    return this.props.items.reduce((s, i) => s + i.cantidad, 0);
+  }
+  get pesoTotalKg(): number {
+    return redondear2(this.props.items.reduce((s, i) => s + i.pesoKg * i.cantidad, 0));
+  }
+
+  /** Fecha y operador del registro (creación) del envío. */
+  get registro(): Gestion {
+    const ev = this.props.historial[0];
+    return { fecha: this.props.creadoEn, operador: ev?.usuario?.nombre ?? null };
+  }
+
+  /** Última gestión de entrega (ENTREGADO / NO_ENTREGADO / NOVEDAD), o null si aún no hubo intento. */
+  get ultimaGestionEntrega(): GestionEntrega | null {
+    for (let i = this.props.historial.length - 1; i >= 0; i--) {
+      const ev = this.props.historial[i]!;
+      if (esResultadoEntrega(ev.estado)) {
+        return { resultado: ev.estado, fecha: ev.fecha, operador: ev.usuario?.nombre ?? null, nota: ev.nota };
+      }
+    }
+    return null;
+  }
 
   toSnapshot(): EnvioProps {
-    return { ...this.props, historial: [...this.props.historial] };
+    return { ...this.props, items: [...this.props.items], historial: [...this.props.historial] };
   }
 }

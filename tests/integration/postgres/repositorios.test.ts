@@ -32,7 +32,7 @@ describe.skipIf(!url)("PostgreSQL", () => {
   });
 
   contratoRepositorios("postgres", async () => {
-    await db.query("TRUNCATE envios, historial_estados");
+    await db.query("TRUNCATE envios, envio_items, historial_estados");
     await db.query("UPDATE rutas SET tarifa_base = 6.00 WHERE id = 11");
     return { envios: new PgEnvioRepository(db), rutas: new PgRutaRepository(db) };
   });

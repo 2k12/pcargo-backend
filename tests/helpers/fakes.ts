@@ -36,10 +36,13 @@ export const solicitudEnvio = (sobrescribir: Record<string, unknown> = {}) => ({
   remitente: { nombre: "María Pérez", telefono: "0991234567" },
   destinatario: { nombre: "Juan Andrade", telefono: "0987654321", direccion: "Av. Amazonas N24-56, Quito" },
   rutaId: 11, // Ibarra → Quito (ver seed-data)
-  tipoCarga: "PAQUETE",
-  pesoKg: 3,
+  items: [{ tipoCarga: "PAQUETE", cantidad: 1, pesoKg: 3 }],
+  formaPago: "PAGADO",
   descripcion: "Documentos y ropa",
   ...sobrescribir,
 });
 
 export const JWT_SECRET_TEST = "secreto-de-pruebas-pcargo-123";
+
+/** Atajo para una solicitud de un solo ítem. */
+export const item = (tipoCarga: string, pesoKg: number, cantidad = 1) => ({ items: [{ tipoCarga, cantidad, pesoKg }] });

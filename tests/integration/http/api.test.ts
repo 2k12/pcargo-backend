@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { Express } from "express";
 import { adaptadoresEnMemoria, crearCasosDeUso } from "../../../src/infrastructure/container.js";
 import { crearApp } from "../../../src/infrastructure/http/app.js";
-import { JWT_SECRET_TEST, solicitudEnvio } from "../../helpers/fakes.js";
+import { item, JWT_SECRET_TEST, solicitudEnvio } from "../../helpers/fakes.js";
 
 // Pila HTTP completa (express + casos de uso + bcrypt/JWT reales) sobre adaptadores en memoria.
 
@@ -76,7 +76,7 @@ describe("Web pública (sin sesión)", () => {
   });
 
   it("POST /publico/cotizar cotiza sin token y valida la entrada", async () => {
-    const r = await request(app).post("/api/publico/cotizar").send({ rutaId: 11, tipoCarga: "SOBRE", pesoKg: 0.3 }).expect(200);
+    const r = await request(app).post("/api/publico/cotizar").send({ rutaId: 11, ...item("SOBRE", 0.3) }).expect(200);
     expect(r.body.costo).toBe(6);
     await request(app).post("/api/publico/cotizar").send({ rutaId: 11 }).expect(400);
   });
@@ -114,16 +114,31 @@ describe("Flujo de un envío", () => {
     const cot = await request(app)
       .post("/api/envios/cotizar")
       .set(auth(tokenOperador))
-      .send({ rutaId: 11, tipoCarga: "CARTON", pesoKg: 5 })
+      .send({ rutaId: 11, ...item("CARTON", 5, 3) })
       .expect(200);
-    expect(cot.body).toEqual({ costo: 11.1, tarifaBase: 6, factor: 1.6, recargoPeso: 1.5 });
+    expect(cot.body).toEqual({
+      costo: 33.3,
+      tarifaBase: 6,
+      totalPiezas: 3,
+      pesoTotalKg: 15,
+      items: [{ tipoCarga: "CARTON", cantidad: 3, pesoKg: 5, factor: 1.6, recargoPeso: 1.5, costoUnitario: 11.1, subtotal: 33.3 }],
+    });
 
     const creado = await request(app)
       .post("/api/envios")
       .set(auth(tokenOperador))
-      .send(solicitudEnvio({ tipoCarga: "CARTON", pesoKg: 5 }))
+      .send(solicitudEnvio({ ...item("CARTON", 5, 3), formaPago: "AL_COBRO" }))
       .expect(201);
-    expect(creado.body).toMatchObject({ estado: "REGISTRADO", costo: 11.1, tipoCarga: "CARTON" });
+    expect(creado.body).toMatchObject({
+      estado: "REGISTRADO",
+      costo: 33.3,
+      totalPiezas: 3,
+      pesoTotalKg: 15,
+      formaPago: "AL_COBRO",
+      items: [{ tipoCarga: "CARTON", cantidad: 3, pesoKg: 5, costoUnitario: 11.1, subtotal: 33.3 }],
+      registro: { operador: "Operador Ibarra" },
+      entrega: null,
+    });
     expect(creado.body.codigo).toMatch(/^PC-[A-Z0-9]{8}$/);
     const { id, codigo } = creado.body;
 
@@ -152,11 +167,33 @@ describe("Flujo de un envío", () => {
     const r = await request(app).patch(`/api/envios/${body.id}/estado`).set(auth(tokenOperador)).send({ estado: "ENTREGADO" }).expect(422);
     expect(r.body.error.code).toBe("TRANSICION_INVALIDA");
 
-    const p = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ tipoCarga: "SOBRE", pesoKg: 2 })).expect(422);
+    const p = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio(item("SOBRE", 2))).expect(422);
     expect(p.body.error.code).toBe("PESO_INVALIDO");
 
-    const i = await request(app).post("/api/envios/cotizar").set(auth(tokenOperador)).send({ rutaId: 2, tipoCarga: "SOBRE", pesoKg: 0.1 }).expect(422);
+    const i = await request(app).post("/api/envios/cotizar").set(auth(tokenOperador)).send({ rutaId: 2, ...item("SOBRE", 0.1) }).expect(422);
     expect(i.body.error.code).toBe("RUTA_INACTIVA");
+  });
+
+  it("no entregado exige motivo (400) y la gestión de entrega queda con fecha y operador", async () => {
+    const { body } = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ formaPago: "SEGURO" })).expect(201);
+    for (const estado of ["EN_TRANSITO", "EN_REPARTO"]) {
+      await request(app).patch(`/api/envios/${body.id}/estado`).set(auth(tokenOperador)).send({ estado }).expect(200);
+    }
+    const sinMotivo = await request(app).patch(`/api/envios/${body.id}/estado`).set(auth(tokenOperador)).send({ estado: "NO_ENTREGADO" }).expect(400);
+    expect(sinMotivo.body.error.message).toMatch(/motivo/);
+
+    const r = await request(app)
+      .patch(`/api/envios/${body.id}/estado`)
+      .set(auth(tokenAdmin))
+      .send({ estado: "NO_ENTREGADO", nota: "Dirección no existe" })
+      .expect(200);
+    expect(r.body.entrega).toMatchObject({ resultado: "NO_ENTREGADO", operador: "Administrador PCargo", nota: "Dirección no existe" });
+    expect(Date.parse(r.body.entrega.fecha)).not.toBeNaN();
+
+    const seguros = await request(app).get("/api/envios?formaPago=SEGURO").set(auth(tokenOperador)).expect(200);
+    expect(seguros.body.map((e: { id: string }) => e.id)).toEqual([body.id]);
+    await request(app).get("/api/envios?formaPago=TARJETA").set(auth(tokenOperador)).expect(400);
+    await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ formaPago: undefined })).expect(400);
   });
 
   it("validaciones de forma → 400; recursos inexistentes → 404", async () => {

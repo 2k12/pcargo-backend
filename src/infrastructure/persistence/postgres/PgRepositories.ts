@@ -9,8 +9,9 @@ import type {
   UsuarioRepository,
 } from "../../../application/ports/repositories.js";
 import type { TipoCarga, TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
-import { Envio, type EventoHistorial } from "../../../domain/envio/Envio.js";
+import { Envio, type EventoHistorial, type ItemEnvio } from "../../../domain/envio/Envio.js";
 import type { EstadoEnvio } from "../../../domain/envio/EstadoEnvio.js";
+import type { FormaPago } from "../../../domain/envio/FormaPago.js";
 import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
 import type { Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
 import type { Db } from "./pool.js";
@@ -143,14 +144,22 @@ interface EnvioRow {
   destinatario_telefono: string;
   destinatario_direccion: string;
   ruta_id: number;
-  tipo_carga: TipoCargaCodigo;
-  peso_kg: number;
   descripcion: string | null;
   costo: number;
+  forma_pago: FormaPago;
   estado: EstadoEnvio;
   creado_por: string | null;
   creado_en: Date;
   actualizado_en: Date;
+}
+
+interface ItemRow {
+  envio_id: string;
+  tipo_carga: TipoCargaCodigo;
+  cantidad: number;
+  peso_unitario_kg: number;
+  costo_unitario: number;
+  subtotal: number;
 }
 
 interface HistorialRow {
@@ -165,24 +174,34 @@ interface HistorialRow {
 export class PgEnvioRepository implements EnvioRepository {
   constructor(private readonly db: Db) {}
 
-  /** Upsert del agregado + inserción de los eventos de historial nuevos, en una transacción. */
+  /** Upsert del agregado; ítems solo al crear (son inmutables); eventos de historial nuevos. Todo en una transacción. */
   async guardar(envio: Envio): Promise<void> {
     const s = envio.toSnapshot();
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
-      await client.query(
+      const upsert = await client.query<{ nuevo: boolean }>(
         `INSERT INTO envios (id, codigo, remitente_nombre, remitente_telefono, destinatario_nombre,
-            destinatario_telefono, destinatario_direccion, ruta_id, tipo_carga, peso_kg, descripcion,
-            costo, estado, creado_por, creado_en, actualizado_en)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-         ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en`,
+            destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, descripcion,
+            costo, forma_pago, estado, creado_por, creado_en, actualizado_en)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en
+         RETURNING (xmax = 0) AS nuevo`,
         [
           s.id, s.codigo, s.remitente.nombre, s.remitente.telefono, s.destinatario.nombre,
-          s.destinatario.telefono, s.destinatario.direccion, s.rutaId, s.tipoCarga, s.pesoKg,
-          s.descripcion, s.costo, s.estado, s.creadoPor, s.creadoEn, s.actualizadoEn,
+          s.destinatario.telefono, s.destinatario.direccion, s.rutaId, envio.totalPiezas, envio.pesoTotalKg,
+          s.descripcion, s.costo, s.formaPago, s.estado, s.creadoPor, s.creadoEn, s.actualizadoEn,
         ],
       );
+      if (upsert.rows[0]?.nuevo) {
+        for (const [i, it] of s.items.entries()) {
+          await client.query(
+            `INSERT INTO envio_items (envio_id, linea, tipo_carga, cantidad, peso_unitario_kg, costo_unitario, subtotal)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            [s.id, i + 1, it.tipoCarga, it.cantidad, it.pesoKg, it.costoUnitario, it.subtotal],
+          );
+        }
+      }
       const { rows } = await client.query<{ n: number }>(
         "SELECT count(*)::int AS n FROM historial_estados WHERE envio_id = $1",
         [s.id],
@@ -220,6 +239,7 @@ export class PgEnvioRepository implements EnvioRepository {
     const params: unknown[] = [];
     if (f.estado) cond.push(`e.estado = $${params.push(f.estado)}`);
     if (f.rutaId) cond.push(`e.ruta_id = $${params.push(f.rutaId)}`);
+    if (f.formaPago) cond.push(`e.forma_pago = $${params.push(f.formaPago)}`);
     if (f.q?.trim()) {
       const i = params.push(`%${f.q.trim()}%`);
       cond.push(`(e.codigo ILIKE $${i} OR e.remitente_nombre ILIKE $${i} OR e.destinatario_nombre ILIKE $${i})`);
@@ -233,11 +253,29 @@ export class PgEnvioRepository implements EnvioRepository {
       params,
     );
     if (rows.length === 0) return [];
+    const ids = rows.map((r) => r.id);
+    const itemsRes = await this.db.query<ItemRow>(
+      `SELECT envio_id, tipo_carga, cantidad, peso_unitario_kg, costo_unitario, subtotal
+         FROM envio_items WHERE envio_id = ANY($1::uuid[]) ORDER BY envio_id, linea`,
+      [ids],
+    );
+    const itemsPorEnvio = new Map<string, ItemEnvio[]>();
+    for (const it of itemsRes.rows) {
+      const lista = itemsPorEnvio.get(it.envio_id) ?? [];
+      lista.push({
+        tipoCarga: it.tipo_carga,
+        cantidad: it.cantidad,
+        pesoKg: it.peso_unitario_kg,
+        costoUnitario: it.costo_unitario,
+        subtotal: it.subtotal,
+      });
+      itemsPorEnvio.set(it.envio_id, lista);
+    }
     const hist = await this.db.query<HistorialRow>(
       `SELECT h.envio_id, h.estado, h.nota, h.fecha, h.usuario_id, u.nombre AS usuario_nombre
          FROM historial_estados h LEFT JOIN usuarios u ON u.id = h.usuario_id
         WHERE h.envio_id = ANY($1::uuid[]) ORDER BY h.fecha, h.id`,
-      [rows.map((r) => r.id)],
+      [ids],
     );
     const porEnvio = new Map<string, EventoHistorial[]>();
     for (const h of hist.rows) {
@@ -261,8 +299,8 @@ export class PgEnvioRepository implements EnvioRepository {
           direccion: r.destinatario_direccion,
         },
         rutaId: r.ruta_id,
-        tipoCarga: r.tipo_carga,
-        pesoKg: r.peso_kg,
+        items: itemsPorEnvio.get(r.id) ?? [],
+        formaPago: r.forma_pago,
         descripcion: r.descripcion,
         costo: r.costo,
         estado: r.estado,

@@ -130,6 +130,7 @@ export class InMemoryEnvioRepository implements EnvioRepository {
     return [...this.datos.values()]
       .filter((p) => !filtro.estado || p.estado === filtro.estado)
       .filter((p) => !filtro.rutaId || p.rutaId === filtro.rutaId)
+      .filter((p) => !filtro.formaPago || p.formaPago === filtro.formaPago)
       .filter(
         (p) =>
           !q ||

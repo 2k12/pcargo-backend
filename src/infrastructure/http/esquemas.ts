@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { TIPOS_CARGA } from "../../domain/carga/TipoCarga.js";
 import { ESTADOS } from "../../domain/envio/EstadoEnvio.js";
+import { FORMAS_PAGO } from "../../domain/envio/FormaPago.js";
+import { MAX_CANTIDAD, MAX_ITEMS } from "../../domain/tarifa/calcularTarifa.js";
 
 // Validación de forma (tipos/obligatorios). Las reglas de negocio viven en el dominio.
 
@@ -11,15 +13,21 @@ export const loginSchema = z.object({
   password: z.string().min(1, "obligatorio"),
 });
 
+const itemSchema = z.object({
+  tipoCarga: z.enum(TIPOS_CARGA),
+  cantidad: z.coerce.number().int().min(1).max(MAX_CANTIDAD),
+  pesoKg: z.coerce.number().positive(), // peso por unidad
+});
+
 export const cotizacionSchema = z.object({
   rutaId: z.coerce.number().int().positive(),
-  tipoCarga: z.enum(TIPOS_CARGA),
-  pesoKg: z.coerce.number().positive(),
+  items: z.array(itemSchema).min(1, "agregue al menos un ítem").max(MAX_ITEMS),
 });
 
 export const crearEnvioSchema = cotizacionSchema.extend({
   remitente: z.object({ nombre: texto, telefono: texto }),
   destinatario: z.object({ nombre: texto, telefono: texto, direccion: texto }),
+  formaPago: z.enum(FORMAS_PAGO),
   descripcion: z.string().max(500).nullish(),
 });
 
@@ -31,6 +39,7 @@ export const cambioEstadoSchema = z.object({
 export const filtroEnviosSchema = z.object({
   estado: z.enum(ESTADOS).optional(),
   rutaId: z.coerce.number().int().positive().optional(),
+  formaPago: z.enum(FORMAS_PAGO).optional(),
   q: z.string().optional(),
 });
 

@@ -26,13 +26,17 @@ usuarios ──┐
            │ creado_por / usuario_id
 ciudades ─< rutas >─ ciudades         tipos_carga (SOBRE, PAQUETE, CARTON, VALIJA)
              │                              │
-             └──────────< envios >──────────┘
-                            │
-                            └──< historial_estados
+             └──────────< envios >───┐      │
+                            │        └──< envio_items >┘   (tipo, cantidad, peso/u, subtotal)
+                            └──< historial_estados          (estado, nota, fecha, usuario)
 ```
 
-- **Tarifa**: `tarifa_base(ruta) × factor(tipo) + max(0, peso − peso_incluido) × 0.50 USD`.
-- **Estados**: `REGISTRADO → EN_TRANSITO → EN_REPARTO → ENTREGADO`, y `REGISTRADO → CANCELADO`.
+- **Ítems**: un envío lleva varias líneas (p. ej. 5 paquetes + 20 cartones); `peso` es por unidad.
+- **Tarifa por pieza**: `tarifa_base(ruta) × factor(tipo) + max(0, peso − peso_incluido) × 0.50 USD`; subtotal = pieza × cantidad.
+- **Forma de pago**: `PAGADO`, `AL_COBRO`, `CONTRATO`, `SEGURO`.
+- **Estados**: `REGISTRADO → EN_TRANSITO → EN_REPARTO → ENTREGADO | NO_ENTREGADO | NOVEDAD`, `REGISTRADO → CANCELADO`;
+  `NO_ENTREGADO → EN_REPARTO` (reintento); `NOVEDAD` se resuelve a reparto/entregado/no entregado. NO_ENTREGADO y NOVEDAD exigen motivo.
+- Cada cambio guarda **fecha y operador**; la API expone `registro` y la última gestión de `entrega`.
 
 ## Tests
 

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { adaptadoresEnMemoria, crearCasosDeUso, type CasosDeUso } from "../../../src/infrastructure/container.js";
-import { ADMIN, FakeClock, hasherFalso, JWT_SECRET_TEST, OPERADOR, SecuenciaIds, solicitudEnvio } from "../../helpers/fakes.js";
+import { ADMIN, FakeClock, hasherFalso, item, JWT_SECRET_TEST, OPERADOR, SecuenciaIds, solicitudEnvio } from "../../helpers/fakes.js";
 
 let c: CasosDeUso;
 let clock: FakeClock;
@@ -30,7 +30,7 @@ describe("Login", () => {
 describe("Cotizar y crear envío", () => {
   it("cotiza con la tarifa de la ruta", async () => {
     // Ibarra → Quito 6.00 * 1.4 + (3 - 2) * 0.5
-    expect(await c.cotizar.ejecutar({ rutaId: 11, tipoCarga: "PAQUETE", pesoKg: 3 })).toMatchObject({ costo: 8.9 });
+    expect(await c.cotizar.ejecutar({ rutaId: 11, ...item("PAQUETE", 3) })).toMatchObject({ costo: 8.9 });
   });
 
   it("crea el envío cobrando el costo cotizado", async () => {
@@ -59,8 +59,8 @@ describe("Cotizar y crear envío", () => {
   });
 
   it("rechaza tipo de carga desconocido y ruta inexistente", async () => {
-    await expect(c.cotizar.ejecutar({ rutaId: 11, tipoCarga: "PIANO", pesoKg: 1 })).rejects.toMatchObject({ code: "VALIDACION" });
-    await expect(c.cotizar.ejecutar({ rutaId: 999, tipoCarga: "SOBRE", pesoKg: 0.1 })).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+    await expect(c.cotizar.ejecutar({ rutaId: 11, ...item("PIANO", 1) })).rejects.toMatchObject({ code: "VALIDACION" });
+    await expect(c.cotizar.ejecutar({ rutaId: 999, ...item("SOBRE", 0.1) })).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
   });
 });
 
@@ -85,7 +85,7 @@ describe("Estados, consultas y seguimiento", () => {
   it("filtra envíos por estado, ruta y texto, más recientes primero", async () => {
     const a = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
     clock.avanzar(5);
-    const b = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ rutaId: 1, tipoCarga: "SOBRE", pesoKg: 0.2, destinatario: { nombre: "Rosa Cevallos", telefono: "0999999999", direccion: "Sucre 4-5" } }));
+    const b = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ rutaId: 1, ...item("SOBRE", 0.2), formaPago: "CONTRATO", destinatario: { nombre: "Rosa Cevallos", telefono: "0999999999", direccion: "Sucre 4-5" } }));
     await c.cambiarEstado.ejecutar(OPERADOR, a.id, "CANCELADO");
 
     expect((await c.listarEnvios.ejecutar()).map((e) => e.id)).toEqual([b.id, a.id]);
@@ -96,15 +96,22 @@ describe("Estados, consultas y seguimiento", () => {
 
   it("resume envíos e ingresos excluyendo cancelados", async () => {
     const a = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
-    await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ tipoCarga: "SOBRE", pesoKg: 0.1 }));
-    await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ tipoCarga: "SOBRE", pesoKg: 0.1 }));
+    await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ ...item("SOBRE", 0.1), formaPago: "AL_COBRO" }));
+    await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ ...item("SOBRE", 0.1), formaPago: "AL_COBRO" }));
     await c.cambiarEstado.ejecutar(OPERADOR, a.id, "CANCELADO");
 
     const r = await c.resumen.ejecutar();
     expect(r.totalEnvios).toBe(3);
     expect(r.ingresos).toBe(12);
     expect(r.porEstado).toMatchObject({ REGISTRADO: 2, CANCELADO: 1, ENTREGADO: 0 });
-    expect(r.porTipo).toContainEqual({ tipoCarga: "SOBRE", total: 2 });
+    expect(r.porTipo).toContainEqual({ tipoCarga: "SOBRE", piezas: 2 });
+    expect(r.totalPiezas).toBe(3);
+    expect(r.porFormaPago).toEqual([
+      { formaPago: "PAGADO", envios: 1, monto: 0 },
+      { formaPago: "AL_COBRO", envios: 2, monto: 12 },
+      { formaPago: "CONTRATO", envios: 0, monto: 0 },
+      { formaPago: "SEGURO", envios: 0, monto: 0 },
+    ]);
     expect(r.porRuta).toEqual([{ ruta: "Ibarra → Quito", total: 3 }]);
   });
 });

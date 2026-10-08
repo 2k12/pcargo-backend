@@ -1,6 +1,7 @@
 import type { TipoCarga, TipoCargaCodigo } from "../../domain/carga/TipoCarga.js";
 import type { Envio } from "../../domain/envio/Envio.js";
 import type { EstadoEnvio } from "../../domain/envio/EstadoEnvio.js";
+import type { FormaPago } from "../../domain/envio/FormaPago.js";
 import type { Ciudad, Ruta } from "../../domain/ruta/Ruta.js";
 import type { Usuario, UsuarioConCredenciales } from "../../domain/usuario/Usuario.js";
 
@@ -45,6 +46,7 @@ export interface RutaRepository {
 export interface FiltroEnvios {
   estado?: EstadoEnvio;
   rutaId?: number;
+  formaPago?: FormaPago;
   /** Busca en código, remitente y destinatario (sin distinguir mayúsculas). */
   q?: string;
 }

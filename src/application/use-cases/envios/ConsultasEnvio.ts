@@ -58,7 +58,8 @@ export interface SeguimientoDTO {
   estado: string;
   origen: string;
   destino: string;
-  tipoCarga: string;
+  items: { tipoCarga: string; cantidad: number }[];
+  totalPiezas: number;
   creadoEn: string;
   historial: EventoHistorialDTO[];
 }
@@ -80,7 +81,8 @@ export class ConsultarSeguimiento {
       estado: s.estado,
       origen: ruta?.origen.nombre ?? "?",
       destino: ruta?.destino.nombre ?? "?",
-      tipoCarga: s.tipoCarga,
+      items: s.items.map(({ tipoCarga, cantidad }) => ({ tipoCarga, cantidad })),
+      totalPiezas: envio.totalPiezas,
       creadoEn: s.creadoEn.toISOString(),
       historial: s.historial.map((e) => ({ ...toEventoDTO(e), usuario: null })),
     };

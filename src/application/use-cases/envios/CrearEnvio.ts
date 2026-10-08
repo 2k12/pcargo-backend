@@ -1,18 +1,19 @@
 import type { Contacto, Destinatario } from "../../../domain/envio/Envio.js";
 import { Envio } from "../../../domain/envio/Envio.js";
+import { esFormaPago } from "../../../domain/envio/FormaPago.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, type EnvioDTO } from "../../dto/EnvioDTO.js";
 import type { EnvioRepository } from "../../ports/repositories.js";
 import type { Clock, IdGenerator } from "../../ports/services.js";
-import type { CotizarEnvio } from "./CotizarEnvio.js";
+import type { CotizarEnvio, ItemSolicitud } from "./CotizarEnvio.js";
 
 export interface SolicitudEnvio {
   remitente: Contacto;
   destinatario: Destinatario;
   rutaId: number;
-  tipoCarga: string;
-  pesoKg: number;
+  items: ItemSolicitud[];
+  formaPago: string;
   descripcion?: string | null;
 }
 
@@ -27,16 +28,22 @@ export class CrearEnvio {
   ) {}
 
   async ejecutar(actor: Actor, s: SolicitudEnvio): Promise<EnvioDTO> {
-    const { ruta, tipo, cotizacion } = await this.cotizador.resolver(s);
+    if (!esFormaPago(s.formaPago)) throw new DomainError("VALIDACION", `Forma de pago desconocida: ${s.formaPago}`);
+    const { ruta, cotizacion } = await this.cotizador.resolver(s);
     const envio = Envio.crear(
       {
         remitente: s.remitente,
         destinatario: s.destinatario,
         rutaId: ruta.id,
-        tipoCarga: tipo.codigo,
-        pesoKg: s.pesoKg,
+        items: cotizacion.items.map(({ tipoCarga, cantidad, pesoKg, costoUnitario, subtotal }) => ({
+          tipoCarga,
+          cantidad,
+          pesoKg,
+          costoUnitario,
+          subtotal,
+        })),
+        formaPago: s.formaPago,
         descripcion: s.descripcion,
-        costo: cotizacion.costo,
       },
       { id: this.ids.uuid(), codigo: await this.codigoUnico(), ahora: this.clock.ahora(), actor },
     );
