@@ -9,6 +9,7 @@ import type { Clock, IdGenerator, PasswordHasher, TokenService } from "../applic
 import { Login } from "../application/use-cases/auth/Login.js";
 import { ObtenerPerfil } from "../application/use-cases/auth/ObtenerPerfil.js";
 import { ListarCiudades, ListarTiposCarga } from "../application/use-cases/catalogo/Catalogo.js";
+import { ObtenerCatalogoPublico } from "../application/use-cases/catalogo/CatalogoPublico.js";
 import { ObtenerResumen } from "../application/use-cases/dashboard/ObtenerResumen.js";
 import {
   CambiarEstadoEnvio,
@@ -60,6 +61,7 @@ export function crearCasosDeUso(a: Adaptadores) {
     perfil: new ObtenerPerfil(a.usuarios),
     listarCiudades: new ListarCiudades(a.ciudades),
     listarTiposCarga: new ListarTiposCarga(a.tiposCarga),
+    catalogoPublico: new ObtenerCatalogoPublico(a.ciudades, a.tiposCarga, a.rutas),
     listarRutas: new ListarRutas(a.rutas),
     crearRuta: new CrearRuta(a.rutas, a.ciudades),
     actualizarRuta: new ActualizarRuta(a.rutas),

@@ -62,6 +62,30 @@ describe("Catálogos", () => {
   });
 });
 
+describe("Web pública (sin sesión)", () => {
+  it("GET /publico/catalogo devuelve ciudades, tipos de carga y solo rutas activas", async () => {
+    const app2 = crearApp(crearCasosDeUso(await adaptadoresEnMemoria({ jwtSecret: JWT_SECRET_TEST, rondasBcrypt: 4 })));
+    const admin = (await request(app2).post("/api/auth/login").send({ email: "admin@pcargo.ec", password: "Admin123!" })).body.token;
+    await request(app2).patch("/api/rutas/3").set(auth(admin)).send({ activa: false }).expect(200);
+
+    const r = await request(app2).get("/api/publico/catalogo").expect(200);
+    expect(r.body.ciudades).toHaveLength(4);
+    expect(r.body.tiposCarga.map((t: { codigo: string }) => t.codigo)).toEqual(["SOBRE", "PAQUETE", "CARTON", "VALIJA"]);
+    expect(r.body.rutas).toHaveLength(15);
+    expect(r.body.rutas.every((x: { activa: boolean }) => x.activa)).toBe(true);
+  });
+
+  it("POST /publico/cotizar cotiza sin token y valida la entrada", async () => {
+    const r = await request(app).post("/api/publico/cotizar").send({ rutaId: 11, tipoCarga: "SOBRE", pesoKg: 0.3 }).expect(200);
+    expect(r.body.costo).toBe(6);
+    await request(app).post("/api/publico/cotizar").send({ rutaId: 11 }).expect(400);
+  });
+
+  it("los endpoints públicos no exponen la gestión", async () => {
+    await request(app).post("/api/publico/rutas").send({}).expect(401);
+  });
+});
+
 describe("Gestión de rutas (ADMIN)", () => {
   it("OPERADOR recibe 403 al modificar rutas", async () => {
     await request(app).patch("/api/rutas/1").set(auth(tokenOperador)).send({ tarifaBase: 9 }).expect(403);
