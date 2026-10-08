@@ -1,4 +1,5 @@
 import type {
+  CambiosCiudad,
   CambiosRuta,
   CiudadRepository,
   EnvioRepository,
@@ -29,13 +30,47 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
   }
 }
 
+/** Copia mutable de las ciudades semilla. Compártala entre el repo de ciudades y el de rutas. */
+export const ciudadesSemilla = (): Ciudad[] => CIUDADES.map((c) => ({ ...c }));
+
+const mismoNombre = (a: string, b: string) => a.localeCompare(b, "es", { sensitivity: "accent" }) === 0;
+
 export class InMemoryCiudadRepository implements CiudadRepository {
-  constructor(private readonly ciudades: Ciudad[] = CIUDADES) {}
-  async listar(): Promise<Ciudad[]> {
-    return [...this.ciudades];
+  /** `ciudades` se muta en sitio para que el repo de rutas vea los cambios. */
+  constructor(private readonly ciudades: Ciudad[] = ciudadesSemilla()) {}
+
+  async listar(filtro: { activa?: boolean } = {}): Promise<Ciudad[]> {
+    return this.ciudades
+      .filter((c) => filtro.activa === undefined || c.activa === filtro.activa)
+      .map((c) => ({ ...c }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
   }
+
   async buscarPorId(id: number): Promise<Ciudad | null> {
-    return this.ciudades.find((c) => c.id === id) ?? null;
+    const c = this.ciudades.find((x) => x.id === id);
+    return c ? { ...c } : null;
+  }
+
+  async existeNombre(nombre: string, excluirId?: number): Promise<boolean> {
+    return this.ciudades.some((c) => c.id !== excluirId && mismoNombre(c.nombre, nombre));
+  }
+
+  async crear(nombre: string): Promise<Ciudad> {
+    const ciudad = { id: Math.max(0, ...this.ciudades.map((c) => c.id)) + 1, nombre, activa: true };
+    this.ciudades.push(ciudad);
+    return { ...ciudad };
+  }
+
+  async actualizar(id: number, cambios: CambiosCiudad): Promise<Ciudad> {
+    const c = this.ciudades.find((x) => x.id === id)!;
+    if (cambios.nombre !== undefined) c.nombre = cambios.nombre;
+    if (cambios.activa !== undefined) c.activa = cambios.activa;
+    return { ...c };
+  }
+
+  async eliminar(id: number): Promise<void> {
+    const i = this.ciudades.findIndex((c) => c.id === id);
+    if (i >= 0) this.ciudades.splice(i, 1);
   }
 }
 
@@ -58,14 +93,17 @@ export class InMemoryRutaRepository implements RutaRepository {
   private filas: RutaFila[];
 
   constructor(
-    private readonly ciudades: Ciudad[] = CIUDADES,
+    private readonly ciudades: Ciudad[] = ciudadesSemilla(),
     semilla: NuevaRuta[] = RUTAS_SEED,
   ) {
     this.filas = semilla.map((r, i) => ({ ...r, id: i + 1, activa: true }));
   }
 
   private aRuta(f: RutaFila): Ruta {
-    const ciudad = (id: number) => this.ciudades.find((c) => c.id === id) ?? { id, nombre: "?" };
+    const ciudad = (id: number): Ciudad => {
+      const c = this.ciudades.find((x) => x.id === id);
+      return c ? { ...c } : { id, nombre: "?", activa: false };
+    };
     return {
       id: f.id,
       origen: ciudad(f.origenId),
@@ -89,6 +127,10 @@ export class InMemoryRutaRepository implements RutaRepository {
 
   async existe(origenId: number, destinoId: number): Promise<boolean> {
     return this.filas.some((f) => f.origenId === origenId && f.destinoId === destinoId);
+  }
+
+  async usaCiudad(ciudadId: number): Promise<boolean> {
+    return this.filas.some((f) => f.origenId === ciudadId || f.destinoId === ciudadId);
   }
 
   async crear(datos: NuevaRuta): Promise<Ruta> {

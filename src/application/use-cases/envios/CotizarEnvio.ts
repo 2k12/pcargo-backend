@@ -1,5 +1,5 @@
 import { esTipoCarga, type TipoCarga } from "../../../domain/carga/TipoCarga.js";
-import type { Ruta } from "../../../domain/ruta/Ruta.js";
+import { esOperativa, type Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import { cotizarItems, type Cotizacion } from "../../../domain/tarifa/calcularTarifa.js";
 import type { RutaRepository, TipoCargaRepository } from "../../ports/repositories.js";
@@ -30,7 +30,9 @@ export class CotizarEnvio {
   async resolver(s: SolicitudCotizacion): Promise<{ ruta: Ruta; cotizacion: Cotizacion }> {
     const ruta = await this.rutas.buscarPorId(s.rutaId);
     if (!ruta) throw new DomainError("NO_ENCONTRADO", "Ruta no encontrada");
-    if (!ruta.activa) throw new DomainError("RUTA_INACTIVA", "La ruta seleccionada no está operativa");
+    if (!esOperativa(ruta)) {
+      throw new DomainError("RUTA_INACTIVA", "La ruta seleccionada (o una de sus ciudades) no está operativa");
+    }
 
     const catalogo = new Map<string, TipoCarga>((await this.tipos.listar()).map((t) => [t.codigo, t]));
     const items = s.items.map((i) => {

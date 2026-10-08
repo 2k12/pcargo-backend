@@ -1,12 +1,12 @@
 import type { TipoCarga } from "../../../domain/carga/TipoCarga.js";
-import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
+import { conEstado, type Ciudad, type RutaConEstado } from "../../../domain/ruta/Ruta.js";
 import type { CiudadRepository, RutaRepository, TipoCargaRepository } from "../../ports/repositories.js";
 
 export interface CatalogoPublico {
   ciudades: Ciudad[];
   tiposCarga: TipoCarga[];
-  /** Solo rutas activas: es lo que se ofrece en la web pública. */
-  rutas: Ruta[];
+  /** Solo rutas operativas: es lo que se ofrece en la web pública. */
+  rutas: RutaConEstado[];
 }
 
 export class ObtenerCatalogoPublico {
@@ -18,10 +18,10 @@ export class ObtenerCatalogoPublico {
 
   async ejecutar(): Promise<CatalogoPublico> {
     const [ciudades, tiposCarga, rutas] = await Promise.all([
-      this.ciudades.listar(),
+      this.ciudades.listar({ activa: true }),
       this.tipos.listar(),
       this.rutas.listar({ activa: true }),
     ]);
-    return { ciudades, tiposCarga, rutas };
+    return { ciudades, tiposCarga, rutas: rutas.map(conEstado).filter((r) => r.operativa) };
   }
 }

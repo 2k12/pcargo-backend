@@ -5,10 +5,10 @@ import type { Rol } from "../../domain/usuario/Usuario.js";
 // Fuente única de datos semilla: la usan el seed de Postgres y el adaptador en memoria.
 
 export const CIUDADES: Ciudad[] = [
-  { id: 1, nombre: "Ibarra" },
-  { id: 2, nombre: "Atuntaqui" },
-  { id: 3, nombre: "Otavalo" },
-  { id: 4, nombre: "Quito" },
+  { id: 1, nombre: "Ibarra", activa: true },
+  { id: 2, nombre: "Atuntaqui", activa: true },
+  { id: 3, nombre: "Otavalo", activa: true },
+  { id: 4, nombre: "Quito", activa: true },
 ];
 
 export const TIPOS_CARGA_SEED: TipoCarga[] = [

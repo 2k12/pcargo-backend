@@ -1,5 +1,5 @@
 import { DomainError } from "../../../domain/shared/DomainError.js";
-import { validarDatosRuta, type Ruta } from "../../../domain/ruta/Ruta.js";
+import { conEstado, validarDatosRuta, type RutaConEstado } from "../../../domain/ruta/Ruta.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
 import type {
   CambiosRuta,
@@ -16,8 +16,11 @@ function exigirAdmin(actor: Actor): void {
 
 export class ListarRutas {
   constructor(private readonly rutas: RutaRepository) {}
-  ejecutar(filtro?: { activa?: boolean }): Promise<Ruta[]> {
-    return this.rutas.listar(filtro);
+
+  /** `activa: true` devuelve solo rutas operativas (ruta y ambas ciudades activas). */
+  async ejecutar(filtro: { activa?: boolean } = {}): Promise<RutaConEstado[]> {
+    const rutas = (await this.rutas.listar(filtro)).map(conEstado);
+    return filtro.activa ? rutas.filter((r) => r.operativa) : rutas;
   }
 }
 
@@ -27,7 +30,7 @@ export class CrearRuta {
     private readonly ciudades: CiudadRepository,
   ) {}
 
-  async ejecutar(actor: Actor, datos: NuevaRuta): Promise<Ruta> {
+  async ejecutar(actor: Actor, datos: NuevaRuta): Promise<RutaConEstado> {
     exigirAdmin(actor);
     validarDatosRuta(datos);
     const [origen, destino] = await Promise.all([
@@ -38,17 +41,17 @@ export class CrearRuta {
     if (await this.rutas.existe(datos.origenId, datos.destinoId)) {
       throw new DomainError("CONFLICTO", `La ruta ${origen.nombre} → ${destino.nombre} ya existe`);
     }
-    return this.rutas.crear(datos);
+    return conEstado(await this.rutas.crear(datos));
   }
 }
 
 export class ActualizarRuta {
   constructor(private readonly rutas: RutaRepository) {}
 
-  async ejecutar(actor: Actor, id: number, cambios: CambiosRuta): Promise<Ruta> {
+  async ejecutar(actor: Actor, id: number, cambios: CambiosRuta): Promise<RutaConEstado> {
     exigirAdmin(actor);
     validarDatosRuta(cambios);
     if (!(await this.rutas.buscarPorId(id))) throw new DomainError("NO_ENCONTRADO", "Ruta no encontrada");
-    return this.rutas.actualizar(id, cambios);
+    return conEstado(await this.rutas.actualizar(id, cambios));
   }
 }

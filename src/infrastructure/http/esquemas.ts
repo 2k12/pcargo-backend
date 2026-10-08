@@ -58,5 +58,11 @@ export const actualizarRutaSchema = z
   })
   .refine((v) => Object.values(v).some((x) => x !== undefined), "Debe enviar al menos un campo");
 
+export const crearCiudadSchema = z.object({ nombre: z.string() });
+
+export const actualizarCiudadSchema = z
+  .object({ nombre: z.string().optional(), activa: z.boolean().optional() })
+  .refine((v) => v.nombre !== undefined || v.activa !== undefined, "Debe enviar al menos un campo");
+
 export const idNumerico = z.coerce.number().int().positive();
 export const idUuid = z.uuid("id inválido");

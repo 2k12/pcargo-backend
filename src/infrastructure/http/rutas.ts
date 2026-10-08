@@ -1,9 +1,11 @@
 import { Router } from "express";
 import type { CasosDeUso } from "../container.js";
 import {
+  actualizarCiudadSchema,
   actualizarRutaSchema,
   cambioEstadoSchema,
   cotizacionSchema,
+  crearCiudadSchema,
   crearEnvioSchema,
   crearRutaSchema,
   filtroEnviosSchema,
@@ -46,8 +48,24 @@ export function crearRouter(c: CasosDeUso): Router {
     res.json(await c.perfil.ejecutar(actorDe(res)));
   });
 
-  privado.get("/ciudades", async (_req, res) => {
-    res.json(await c.listarCiudades.ejecutar());
+  privado.get("/ciudades", async (req, res) => {
+    const activa = req.query.activa === undefined ? undefined : req.query.activa === "true";
+    res.json(await c.listarCiudades.ejecutar({ activa }));
+  });
+
+  privado.post("/ciudades", async (req, res) => {
+    const { nombre } = crearCiudadSchema.parse(req.body);
+    res.status(201).json(await c.crearCiudad.ejecutar(actorDe(res), nombre));
+  });
+
+  privado.patch("/ciudades/:id", async (req, res) => {
+    const id = idNumerico.parse(req.params.id);
+    res.json(await c.actualizarCiudad.ejecutar(actorDe(res), id, actualizarCiudadSchema.parse(req.body)));
+  });
+
+  privado.delete("/ciudades/:id", async (req, res) => {
+    await c.eliminarCiudad.ejecutar(actorDe(res), idNumerico.parse(req.params.id));
+    res.status(204).end();
   });
 
   privado.get("/tipos-carga", async (_req, res) => {

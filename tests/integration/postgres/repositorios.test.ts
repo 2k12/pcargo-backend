@@ -2,17 +2,23 @@ import { afterAll, beforeAll, describe } from "vitest";
 import { migrar } from "../../../src/infrastructure/persistence/postgres/migrar.js";
 import { sembrar } from "../../../src/infrastructure/persistence/postgres/sembrar.js";
 import {
+  ciudadesSemilla,
+  InMemoryCiudadRepository,
   InMemoryEnvioRepository,
   InMemoryRutaRepository,
 } from "../../../src/infrastructure/persistence/memory/InMemoryRepositories.js";
-import { PgEnvioRepository, PgRutaRepository } from "../../../src/infrastructure/persistence/postgres/PgRepositories.js";
+import { PgCiudadRepository, PgEnvioRepository, PgRutaRepository } from "../../../src/infrastructure/persistence/postgres/PgRepositories.js";
 import { crearPool, type Db } from "../../../src/infrastructure/persistence/postgres/pool.js";
 import { contratoRepositorios } from "../../helpers/contrato-repositorios.js";
 
-contratoRepositorios("memoria", async () => ({
-  envios: new InMemoryEnvioRepository(),
-  rutas: new InMemoryRutaRepository(),
-}));
+contratoRepositorios("memoria", async () => {
+  const ciudades = ciudadesSemilla();
+  return {
+    envios: new InMemoryEnvioRepository(),
+    rutas: new InMemoryRutaRepository(ciudades),
+    ciudades: new InMemoryCiudadRepository(ciudades),
+  };
+});
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -34,6 +40,8 @@ describe.skipIf(!url)("PostgreSQL", () => {
   contratoRepositorios("postgres", async () => {
     await db.query("TRUNCATE envios, envio_items, historial_estados");
     await db.query("UPDATE rutas SET tarifa_base = 6.00 WHERE id = 11");
-    return { envios: new PgEnvioRepository(db), rutas: new PgRutaRepository(db) };
+    await db.query("DELETE FROM ciudades c WHERE id > 4 AND NOT EXISTS (SELECT 1 FROM rutas r WHERE c.id IN (r.origen_id, r.destino_id))");
+    await db.query("UPDATE ciudades SET activa = TRUE");
+    return { envios: new PgEnvioRepository(db), rutas: new PgRutaRepository(db), ciudades: new PgCiudadRepository(db) };
   });
 });

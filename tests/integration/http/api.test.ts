@@ -54,7 +54,7 @@ describe("Autenticación", () => {
 describe("Catálogos", () => {
   it("lista ciudades, tipos de carga y rutas", async () => {
     const ciudades = await request(app).get("/api/ciudades").set(auth(tokenOperador)).expect(200);
-    expect(ciudades.body.map((c: { nombre: string }) => c.nombre)).toEqual(["Ibarra", "Atuntaqui", "Otavalo", "Quito"]);
+    expect(ciudades.body.map((c: { nombre: string }) => c.nombre)).toEqual(["Atuntaqui", "Ibarra", "Otavalo", "Quito"]);
     const tipos = await request(app).get("/api/tipos-carga").set(auth(tokenOperador)).expect(200);
     expect(tipos.body.map((t: { codigo: string }) => t.codigo)).toEqual(["SOBRE", "PAQUETE", "CARTON", "VALIJA"]);
     const rutas = await request(app).get("/api/rutas?activa=true").set(auth(tokenOperador)).expect(200);
@@ -83,6 +83,44 @@ describe("Web pública (sin sesión)", () => {
 
   it("los endpoints públicos no exponen la gestión", async () => {
     await request(app).post("/api/publico/rutas").send({}).expect(401);
+  });
+});
+
+describe("Ciudades de cobertura (ADMIN)", () => {
+  it("crea, renombra, desactiva y elimina; OPERADOR recibe 403", async () => {
+    await request(app).post("/api/ciudades").set(auth(tokenOperador)).send({ nombre: "Cayambe" }).expect(403);
+
+    const creada = await request(app).post("/api/ciudades").set(auth(tokenAdmin)).send({ nombre: "Cayambe" }).expect(201);
+    expect(creada.body).toMatchObject({ nombre: "Cayambe", activa: true });
+    const id = creada.body.id;
+
+    await request(app).post("/api/ciudades").set(auth(tokenAdmin)).send({ nombre: "cayambe" }).expect(409);
+    const ren = await request(app).patch(`/api/ciudades/${id}`).set(auth(tokenAdmin)).send({ nombre: "Cayambe Centro" }).expect(200);
+    expect(ren.body.nombre).toBe("Cayambe Centro");
+    await request(app).patch(`/api/ciudades/${id}`).set(auth(tokenAdmin)).send({}).expect(400);
+
+    const activas = await request(app).get("/api/ciudades?activa=true").set(auth(tokenOperador)).expect(200);
+    expect(activas.body.map((c: { nombre: string }) => c.nombre)).toContain("Cayambe Centro");
+
+    await request(app).delete(`/api/ciudades/${id}`).set(auth(tokenOperador)).expect(403);
+    await request(app).delete(`/api/ciudades/${id}`).set(auth(tokenAdmin)).expect(204);
+    await request(app).delete(`/api/ciudades/${id}`).set(auth(tokenAdmin)).expect(404);
+  });
+
+  it("no elimina una ciudad con rutas (409) y al desactivarla sus rutas dejan de ser operativas", async () => {
+    const r = await request(app).delete("/api/ciudades/3").set(auth(tokenAdmin)).expect(409);
+    expect(r.body.error.message).toMatch(/desactívela/);
+
+    await request(app).patch("/api/ciudades/3").set(auth(tokenAdmin)).send({ activa: false }).expect(200);
+    const rutas = await request(app).get("/api/rutas").set(auth(tokenOperador)).expect(200);
+    const haciaOtavalo = rutas.body.filter((x: { destino: { id: number } }) => x.destino.id === 3);
+    expect(haciaOtavalo.length).toBeGreaterThan(0);
+    expect(haciaOtavalo.every((x: { operativa: boolean }) => !x.operativa)).toBe(true);
+    await request(app).post("/api/envios/cotizar").set(auth(tokenOperador)).send({ rutaId: 7, ...item("SOBRE", 0.1) }).expect(422);
+    const publico = await request(app).get("/api/publico/catalogo").expect(200);
+    expect(publico.body.ciudades.map((c: { nombre: string }) => c.nombre)).not.toContain("Otavalo");
+
+    await request(app).patch("/api/ciudades/3").set(auth(tokenAdmin)).send({ activa: true }).expect(200);
   });
 });
 

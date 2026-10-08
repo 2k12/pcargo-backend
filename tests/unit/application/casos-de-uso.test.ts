@@ -116,6 +116,58 @@ describe("Estados, consultas y seguimiento", () => {
   });
 });
 
+describe("Ciudades de cobertura", () => {
+  it("ADMIN agrega una ciudad, crea su ruta y queda en el catálogo público", async () => {
+    const cayambe = await c.crearCiudad.ejecutar(ADMIN, "  Cayambe ");
+    expect(cayambe).toMatchObject({ nombre: "Cayambe", activa: true });
+    const ruta = await c.crearRuta.ejecutar(ADMIN, { origenId: 1, destinoId: cayambe.id, tarifaBase: 4, tiempoEstimadoMin: 75 });
+    expect(ruta.operativa).toBe(true);
+
+    const catalogo = await c.catalogoPublico.ejecutar();
+    expect(catalogo.ciudades.map((x) => x.nombre)).toContain("Cayambe");
+    expect(catalogo.rutas.map((r) => r.id)).toContain(ruta.id);
+  });
+
+  it("no permite nombres repetidos (sin distinguir mayúsculas) ni a OPERADOR", async () => {
+    await expect(c.crearCiudad.ejecutar(ADMIN, "IBARRA")).rejects.toMatchObject({ code: "CONFLICTO" });
+    await expect(c.actualizarCiudad.ejecutar(ADMIN, 2, { nombre: "otavalo" })).rejects.toMatchObject({ code: "CONFLICTO" });
+    await expect(c.crearCiudad.ejecutar(OPERADOR, "Cayambe")).rejects.toMatchObject({ code: "PROHIBIDO" });
+    await expect(c.crearCiudad.ejecutar(ADMIN, "X")).rejects.toMatchObject({ code: "VALIDACION" });
+    // renombrar a su mismo nombre (cambiando mayúsculas) sí se permite
+    expect((await c.actualizarCiudad.ejecutar(ADMIN, 2, { nombre: "ATUNTAQUI" })).nombre).toBe("ATUNTAQUI");
+  });
+
+  it("desactivar una ciudad deja sus rutas no operativas y bloquea nuevos envíos por ellas", async () => {
+    await c.actualizarCiudad.ejecutar(ADMIN, 4, { activa: false }); // Quito
+    const rutas = await c.listarRutas.ejecutar();
+    const ibarraQuito = rutas.find((r) => r.id === 11)!;
+    expect(ibarraQuito).toMatchObject({ activa: true, operativa: false, destino: { nombre: "Quito", activa: false } });
+    expect((await c.listarRutas.ejecutar({ activa: true })).some((r) => r.id === 11)).toBe(false);
+    await expect(c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio())).rejects.toMatchObject({ code: "RUTA_INACTIVA" });
+
+    const catalogo = await c.catalogoPublico.ejecutar();
+    expect(catalogo.ciudades.map((x) => x.nombre)).not.toContain("Quito");
+    expect(catalogo.rutas.every((r) => r.origen.nombre !== "Quito" && r.destino.nombre !== "Quito")).toBe(true);
+
+    await c.actualizarCiudad.ejecutar(ADMIN, 4, { activa: true });
+    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio())).estado).toBe("REGISTRADO");
+  });
+
+  it("solo elimina ciudades sin rutas", async () => {
+    await expect(c.eliminarCiudad.ejecutar(ADMIN, 1)).rejects.toMatchObject({ code: "CONFLICTO" });
+    const nueva = await c.crearCiudad.ejecutar(ADMIN, "Pimampiro");
+    await c.eliminarCiudad.ejecutar(ADMIN, nueva.id);
+    expect((await c.listarCiudades.ejecutar()).map((x) => x.nombre)).not.toContain("Pimampiro");
+    await expect(c.eliminarCiudad.ejecutar(ADMIN, nueva.id)).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+  });
+
+  it("lista ordenado por nombre y filtra activas", async () => {
+    await c.actualizarCiudad.ejecutar(ADMIN, 3, { activa: false });
+    expect((await c.listarCiudades.ejecutar()).map((x) => x.nombre)).toEqual(["Atuntaqui", "Ibarra", "Otavalo", "Quito"]);
+    expect((await c.listarCiudades.ejecutar({ activa: true })).map((x) => x.nombre)).toEqual(["Atuntaqui", "Ibarra", "Quito"]);
+  });
+});
+
 describe("Gestión de rutas", () => {
   it("solo ADMIN crea o modifica rutas", async () => {
     await expect(c.actualizarRuta.ejecutar(OPERADOR, 1, { tarifaBase: 9 })).rejects.toMatchObject({ code: "PROHIBIDO" });

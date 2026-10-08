@@ -1,4 +1,5 @@
 import type {
+  CambiosCiudad,
   CambiosRuta,
   CiudadRepository,
   EnvioRepository,
@@ -40,12 +41,41 @@ export class PgUsuarioRepository implements UsuarioRepository {
 export class PgCiudadRepository implements CiudadRepository {
   constructor(private readonly db: Db) {}
 
-  async listar(): Promise<Ciudad[]> {
-    return (await this.db.query("SELECT id, nombre FROM ciudades ORDER BY id")).rows;
+  async listar(filtro: { activa?: boolean } = {}): Promise<Ciudad[]> {
+    const where = filtro.activa === undefined ? "" : "WHERE activa = $1";
+    const params = filtro.activa === undefined ? [] : [filtro.activa];
+    return (await this.db.query(`SELECT id, nombre, activa FROM ciudades ${where} ORDER BY nombre`, params)).rows;
   }
 
   async buscarPorId(id: number): Promise<Ciudad | null> {
-    return (await this.db.query("SELECT id, nombre FROM ciudades WHERE id = $1", [id])).rows[0] ?? null;
+    return (await this.db.query("SELECT id, nombre, activa FROM ciudades WHERE id = $1", [id])).rows[0] ?? null;
+  }
+
+  async existeNombre(nombre: string, excluirId?: number): Promise<boolean> {
+    const { rowCount } = await this.db.query(
+      "SELECT 1 FROM ciudades WHERE lower(nombre) = lower($1) AND id <> COALESCE($2, -1)",
+      [nombre, excluirId ?? null],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async crear(nombre: string): Promise<Ciudad> {
+    return (await this.db.query("INSERT INTO ciudades (nombre) VALUES ($1) RETURNING id, nombre, activa", [nombre]))
+      .rows[0];
+  }
+
+  async actualizar(id: number, c: CambiosCiudad): Promise<Ciudad> {
+    return (
+      await this.db.query(
+        `UPDATE ciudades SET nombre = COALESCE($2, nombre), activa = COALESCE($3, activa)
+          WHERE id = $1 RETURNING id, nombre, activa`,
+        [id, c.nombre ?? null, c.activa ?? null],
+      )
+    ).rows[0];
+  }
+
+  async eliminar(id: number): Promise<void> {
+    await this.db.query("DELETE FROM ciudades WHERE id = $1", [id]);
   }
 }
 
@@ -68,15 +98,18 @@ interface RutaRow {
   id: number;
   origen_id: number;
   origen_nombre: string;
+  origen_activa: boolean;
   destino_id: number;
   destino_nombre: string;
+  destino_activa: boolean;
   tarifa_base: number;
   tiempo_estimado_min: number;
   activa: boolean;
 }
 
 const SELECT_RUTA = `
-  SELECT r.id, r.origen_id, o.nombre AS origen_nombre, r.destino_id, d.nombre AS destino_nombre,
+  SELECT r.id, r.origen_id, o.nombre AS origen_nombre, o.activa AS origen_activa,
+         r.destino_id, d.nombre AS destino_nombre, d.activa AS destino_activa,
          r.tarifa_base, r.tiempo_estimado_min, r.activa
     FROM rutas r
     JOIN ciudades o ON o.id = r.origen_id
@@ -84,8 +117,8 @@ const SELECT_RUTA = `
 
 const aRuta = (r: RutaRow): Ruta => ({
   id: r.id,
-  origen: { id: r.origen_id, nombre: r.origen_nombre },
-  destino: { id: r.destino_id, nombre: r.destino_nombre },
+  origen: { id: r.origen_id, nombre: r.origen_nombre, activa: r.origen_activa },
+  destino: { id: r.destino_id, nombre: r.destino_nombre, activa: r.destino_activa },
   tarifaBase: r.tarifa_base,
   tiempoEstimadoMin: r.tiempo_estimado_min,
   activa: r.activa,
@@ -110,6 +143,14 @@ export class PgRutaRepository implements RutaRepository {
     const { rowCount } = await this.db.query(
       "SELECT 1 FROM rutas WHERE origen_id = $1 AND destino_id = $2",
       [origenId, destinoId],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async usaCiudad(ciudadId: number): Promise<boolean> {
+    const { rowCount } = await this.db.query(
+      "SELECT 1 FROM rutas WHERE origen_id = $1 OR destino_id = $1 LIMIT 1",
+      [ciudadId],
     );
     return (rowCount ?? 0) > 0;
   }

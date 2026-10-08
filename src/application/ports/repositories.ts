@@ -12,9 +12,20 @@ export interface UsuarioRepository {
   buscarPorId(id: string): Promise<Usuario | null>;
 }
 
+export interface CambiosCiudad {
+  nombre?: string;
+  activa?: boolean;
+}
+
 export interface CiudadRepository {
-  listar(): Promise<Ciudad[]>;
+  /** Ordenadas por nombre. */
+  listar(filtro?: { activa?: boolean }): Promise<Ciudad[]>;
   buscarPorId(id: number): Promise<Ciudad | null>;
+  /** Sin distinguir mayúsculas; `excluirId` permite renombrar una ciudad a su mismo nombre. */
+  existeNombre(nombre: string, excluirId?: number): Promise<boolean>;
+  crear(nombre: string): Promise<Ciudad>;
+  actualizar(id: number, cambios: CambiosCiudad): Promise<Ciudad>;
+  eliminar(id: number): Promise<void>;
 }
 
 export interface TipoCargaRepository {
@@ -39,6 +50,8 @@ export interface RutaRepository {
   listar(filtro?: { activa?: boolean }): Promise<Ruta[]>;
   buscarPorId(id: number): Promise<Ruta | null>;
   existe(origenId: number, destinoId: number): Promise<boolean>;
+  /** ¿Alguna ruta (activa o no) usa la ciudad como origen o destino? */
+  usaCiudad(ciudadId: number): Promise<boolean>;
   crear(datos: NuevaRuta): Promise<Ruta>;
   actualizar(id: number, cambios: CambiosRuta): Promise<Ruta>;
 }

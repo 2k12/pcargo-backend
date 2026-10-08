@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { generarCodigoSeguimiento, PATRON_CODIGO } from "../../../src/domain/envio/CodigoSeguimiento.js";
 import { Envio, type NuevoEnvio } from "../../../src/domain/envio/Envio.js";
 import { ESTADOS, puedeTransicionar } from "../../../src/domain/envio/EstadoEnvio.js";
-import { nombreRuta, validarDatosRuta } from "../../../src/domain/ruta/Ruta.js";
+import { conEstado, esOperativa, nombreRuta, normalizarNombreCiudad, validarDatosRuta } from "../../../src/domain/ruta/Ruta.js";
 import { ADMIN, OPERADOR } from "../../helpers/fakes.js";
 
 const ahora = new Date("2026-10-01T10:00:00Z");
@@ -120,12 +120,26 @@ describe("código de seguimiento", () => {
 });
 
 describe("Ruta", () => {
-  const ib = { id: 1, nombre: "Ibarra" };
-  const qu = { id: 4, nombre: "Quito" };
+  const ib = { id: 1, nombre: "Ibarra", activa: true };
+  const qu = { id: 4, nombre: "Quito", activa: true };
 
   it("nombra rutas urbanas e interurbanas", () => {
     expect(nombreRuta({ origen: ib, destino: ib })).toBe("Ibarra (urbano)");
     expect(nombreRuta({ origen: ib, destino: qu })).toBe("Ibarra → Quito");
+  });
+
+  it("una ruta es operativa solo si ella y sus dos ciudades están activas", () => {
+    const base = { id: 1, origen: ib, destino: qu, tarifaBase: 6, tiempoEstimadoMin: 180, activa: true };
+    expect(esOperativa(base)).toBe(true);
+    expect(esOperativa({ ...base, activa: false })).toBe(false);
+    expect(esOperativa({ ...base, destino: { ...qu, activa: false } })).toBe(false);
+    expect(conEstado({ ...base, origen: { ...ib, activa: false } }).operativa).toBe(false);
+  });
+
+  it("normaliza y valida el nombre de una ciudad", () => {
+    expect(normalizarNombreCiudad("  San   Antonio de Ibarra ")).toBe("San Antonio de Ibarra");
+    expect(() => normalizarNombreCiudad("X")).toThrow(/entre 2 y 60/);
+    expect(() => normalizarNombreCiudad("a".repeat(61))).toThrow(/entre 2 y 60/);
   });
 
   it("valida tarifa y tiempo", () => {

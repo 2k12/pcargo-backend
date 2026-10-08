@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { EnvioRepository, RutaRepository } from "../../src/application/ports/repositories.js";
+import type { CiudadRepository, EnvioRepository, RutaRepository } from "../../src/application/ports/repositories.js";
 import { Envio } from "../../src/domain/envio/Envio.js";
 import { OPERADOR, solicitudEnvio } from "./fakes.js";
 
 export interface FabricaRepos {
   envios: EnvioRepository;
   rutas: RutaRepository;
+  ciudades: CiudadRepository;
 }
 
 /**
@@ -114,6 +115,24 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
     it("devuelve null para envíos inexistentes", async () => {
       expect(await repos.envios.buscarPorId("00000000-0000-4000-8000-0000000fffff")).toBeNull();
       expect(await repos.envios.existeCodigo("PC-ZZZZZZZZ")).toBe(false);
+    });
+
+    it("gestiona ciudades y las rutas reflejan su nombre y estado", async () => {
+      const nueva = await repos.ciudades.crear("Cayambe");
+      expect(nueva).toMatchObject({ nombre: "Cayambe", activa: true });
+      expect(await repos.ciudades.existeNombre("CAYAMBE")).toBe(true);
+      expect(await repos.ciudades.existeNombre("cayambe", nueva.id)).toBe(false);
+      expect(await repos.rutas.usaCiudad(nueva.id)).toBe(false);
+      expect(await repos.rutas.usaCiudad(4)).toBe(true);
+
+      await repos.ciudades.actualizar(4, { activa: false });
+      const r = (await repos.rutas.buscarPorId(11))!;
+      expect(r.destino).toEqual({ id: 4, nombre: "Quito", activa: false });
+      expect((await repos.ciudades.listar({ activa: true })).map((c) => c.nombre)).not.toContain("Quito");
+      await repos.ciudades.actualizar(4, { activa: true });
+
+      await repos.ciudades.eliminar(nueva.id);
+      expect(await repos.ciudades.buscarPorId(nueva.id)).toBeNull();
     });
 
     it("lee y actualiza rutas con sus ciudades", async () => {

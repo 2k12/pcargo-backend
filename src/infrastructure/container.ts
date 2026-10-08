@@ -8,7 +8,13 @@ import type {
 import type { Clock, IdGenerator, PasswordHasher, TokenService } from "../application/ports/services.js";
 import { Login } from "../application/use-cases/auth/Login.js";
 import { ObtenerPerfil } from "../application/use-cases/auth/ObtenerPerfil.js";
-import { ListarCiudades, ListarTiposCarga } from "../application/use-cases/catalogo/Catalogo.js";
+import {
+  ActualizarCiudad,
+  CrearCiudad,
+  EliminarCiudad,
+  ListarCiudades,
+  ListarTiposCarga,
+} from "../application/use-cases/catalogo/Catalogo.js";
 import { ObtenerCatalogoPublico } from "../application/use-cases/catalogo/CatalogoPublico.js";
 import { ObtenerResumen } from "../application/use-cases/dashboard/ObtenerResumen.js";
 import {
@@ -22,6 +28,7 @@ import { CrearEnvio } from "../application/use-cases/envios/CrearEnvio.js";
 import { ActualizarRuta, CrearRuta, ListarRutas } from "../application/use-cases/rutas/Rutas.js";
 import type { Config } from "./config/env.js";
 import {
+  ciudadesSemilla,
   InMemoryCiudadRepository,
   InMemoryEnvioRepository,
   InMemoryRutaRepository,
@@ -60,6 +67,9 @@ export function crearCasosDeUso(a: Adaptadores) {
     login: new Login(a.usuarios, a.hasher, a.tokens),
     perfil: new ObtenerPerfil(a.usuarios),
     listarCiudades: new ListarCiudades(a.ciudades),
+    crearCiudad: new CrearCiudad(a.ciudades),
+    actualizarCiudad: new ActualizarCiudad(a.ciudades),
+    eliminarCiudad: new EliminarCiudad(a.ciudades, a.rutas),
     listarTiposCarga: new ListarTiposCarga(a.tiposCarga),
     catalogoPublico: new ObtenerCatalogoPublico(a.ciudades, a.tiposCarga, a.rutas),
     listarRutas: new ListarRutas(a.rutas),
@@ -88,11 +98,13 @@ export async function adaptadoresEnMemoria(
       activo: true,
     })),
   );
+  // Ciudades y rutas comparten la misma lista para que renombrar/desactivar se refleje en las rutas.
+  const ciudades = ciudadesSemilla();
   return {
     usuarios: new InMemoryUsuarioRepository(usuarios),
-    ciudades: new InMemoryCiudadRepository(),
+    ciudades: new InMemoryCiudadRepository(ciudades),
     tiposCarga: new InMemoryTipoCargaRepository(),
-    rutas: new InMemoryRutaRepository(),
+    rutas: new InMemoryRutaRepository(ciudades),
     envios: new InMemoryEnvioRepository(),
     hasher,
     tokens: new JwtTokenService(opciones.jwtSecret),
