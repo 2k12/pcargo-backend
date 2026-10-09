@@ -4,6 +4,7 @@
   "private": true,
   "description": "PCargo — API de servicios logísticos (arquitectura hexagonal)",
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": ">=20"
   },

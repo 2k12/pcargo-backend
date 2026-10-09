@@ -1,0 +1,8 @@
+# Lo que no debe entrar en la imagen: dependencias y build locales (se instalan/compilan dentro), secretos y git.
+node_modules
+dist
+coverage
+.env
+.env.*
+!.env.example
+.git
