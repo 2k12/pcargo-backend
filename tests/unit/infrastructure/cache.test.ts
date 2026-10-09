@@ -4,10 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { RutaRepository } from "../../../src/application/ports/repositories.js";
 import type { Ruta } from "../../../src/domain/ruta/Ruta.js";
 import {
+  claveCatalogo,
   claveGuia,
   conCache,
   invalidaTras,
   RutaRepositoryEnCache,
+  VERSION_CATALOGO,
 } from "../../../src/infrastructure/cache/decoradores.js";
 import { MemoryCache, MemoryLimitadorTasa, SinCache } from "../../../src/infrastructure/cache/memoria.js";
 import { limitarTasa } from "../../../src/infrastructure/http/middlewares/limitarTasa.js";
@@ -84,14 +86,14 @@ describe("conCache / invalidaTras", () => {
 
 describe("RutaRepositoryEnCache", () => {
   const ciudad = { id: 1, nombre: "Ibarra", activa: true };
-  const ruta: Ruta = { id: 7, origen: ciudad, destino: ciudad, tarifaBase: 2, tiempoEstimadoMin: 30, activa: true };
+  const ruta: Ruta = { id: 7, origen: ciudad, destino: ciudad, tiempoEstimadoMin: 30, activa: true };
   const interno = (): RutaRepository => ({
     listar: vi.fn(async () => [ruta]),
     buscarPorId: vi.fn(async () => ruta),
     existe: vi.fn(async () => false),
     usaCiudad: vi.fn(async () => true),
     crear: vi.fn(async () => ruta),
-    actualizar: vi.fn(async () => ({ ...ruta, tarifaBase: 3 })),
+    actualizar: vi.fn(async () => ({ ...ruta, tiempoEstimadoMin: 40 })),
   });
 
   it("resuelve listar y buscarPorId desde un único listado cacheado", async () => {
@@ -107,13 +109,20 @@ describe("RutaRepositoryEnCache", () => {
   it("crear y actualizar invalidan el catálogo", async () => {
     const repo = interno();
     const cache = new MemoryCache();
-    await cache.guardar("catalogo:publico", { viejo: true }, 60);
+    await cache.guardar(claveCatalogo("publico"), { viejo: true }, 60);
+    await cache.guardar("catalogo:publico", { deV7: true }, 60);
     const enCache = new RutaRepositoryEnCache(repo, cache);
     await enCache.listar();
-    await enCache.actualizar(7, { tarifaBase: 3 });
+    await enCache.actualizar(7, { tiempoEstimadoMin: 40 });
     await enCache.listar();
     expect(repo.listar).toHaveBeenCalledTimes(2);
+    expect(await cache.obtener(claveCatalogo("publico"))).toBeUndefined();
     expect(await cache.obtener("catalogo:publico")).toBeUndefined();
+  });
+
+  it("las claves del catálogo llevan la versión del contrato (no se leen entradas de versiones anteriores)", () => {
+    expect(claveCatalogo("publico")).toBe(`catalogo:${VERSION_CATALOGO}:publico`);
+    expect(VERSION_CATALOGO).toBe("v8");
   });
 });
 

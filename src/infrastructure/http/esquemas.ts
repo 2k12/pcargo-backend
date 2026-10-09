@@ -3,6 +3,7 @@ import { TIPOS_CARGA } from "../../domain/carga/TipoCarga.js";
 import { ESTADOS } from "../../domain/envio/EstadoEnvio.js";
 import { FORMAS_PAGO } from "../../domain/envio/FormaPago.js";
 import { MAX_CANTIDAD, MAX_ITEMS } from "../../domain/tarifa/calcularTarifa.js";
+import { ZONAS } from "../../domain/tarifa/Zona.js";
 
 // Validación de forma (tipos/obligatorios). Las reglas de negocio viven en el dominio.
 
@@ -22,6 +23,7 @@ const itemSchema = z.object({
 export const cotizacionSchema = z.object({
   rutaId: z.coerce.number().int().positive(),
   items: z.array(itemSchema).min(1, "agregue al menos un ítem").max(MAX_ITEMS),
+  zona: z.enum(ZONAS).optional(), // por defecto URBANA (lo aplica el caso de uso)
 });
 
 export const crearEnvioSchema = cotizacionSchema.extend({
@@ -83,13 +85,11 @@ export const actualizarClienteSchema = datosClienteSchema
 export const crearRutaSchema = z.object({
   origenId: z.coerce.number().int().positive(),
   destinoId: z.coerce.number().int().positive(),
-  tarifaBase: z.coerce.number(),
   tiempoEstimadoMin: z.coerce.number().int(),
 });
 
 export const actualizarRutaSchema = z
   .object({
-    tarifaBase: z.coerce.number().optional(),
     tiempoEstimadoMin: z.coerce.number().int().optional(),
     activa: z.boolean().optional(),
   })

@@ -35,9 +35,45 @@ describe("Login", () => {
 });
 
 describe("Cotizar y crear envío", () => {
-  it("cotiza con la tarifa de la ruta", async () => {
-    // Ibarra → Quito 6.00 * 1.4 + (3 - 2) * 0.5
-    expect(await c.cotizar.ejecutar({ rutaId: 11, ...item("PAQUETE", 3) })).toMatchObject({ costo: 8.9 });
+  it("cotiza por tipo de carga: la ruta no influye en el precio", async () => {
+    // Ibarra → Quito y Ibarra urbano: un paquete cuesta 3.00 en cualquier ruta, sin recargo por peso
+    expect(await c.cotizar.ejecutar({ rutaId: 11, ...item("PAQUETE", 3) })).toEqual({
+      costo: 3,
+      zona: "URBANA",
+      totalPiezas: 1,
+      pesoTotalKg: 3,
+      items: [{ tipoCarga: "PAQUETE", cantidad: 1, pesoKg: 3, costoUnitario: 3, subtotal: 3, mayoreo: false }],
+    });
+    expect((await c.cotizar.ejecutar({ rutaId: 1, ...item("PAQUETE", 45) })).costo).toBe(3);
+  });
+
+  it("cotiza la tela según la zona y con mayoreo sobre 50 rollos de todo el envío", async () => {
+    const tela = (cantidad: number) => ({ tipoCarga: "TELA", cantidad, pesoKg: 2 });
+    expect((await c.cotizar.ejecutar({ rutaId: 11, items: [tela(10)] })).costo).toBe(12.5);
+    expect(await c.cotizar.ejecutar({ rutaId: 11, items: [tela(10)], zona: "RURAL" })).toMatchObject({ zona: "RURAL", costo: 15 });
+    // 25 + 25 = 50 rollos: sin mayoreo
+    expect((await c.cotizar.ejecutar({ rutaId: 11, items: [tela(25), tela(25)], zona: "RURAL" })).costo).toBe(75);
+    // 25 + 26 = 51 rollos: todos a 1.00, también en zona rural
+    const mayoreo = await c.cotizar.ejecutar({ rutaId: 11, items: [tela(25), tela(26)], zona: "RURAL" });
+    expect(mayoreo.costo).toBe(51);
+    expect(mayoreo.items.every((i) => i.mayoreo && i.costoUnitario === 1)).toBe(true);
+    await expect(c.cotizar.ejecutar({ rutaId: 11, items: [tela(1)], zona: "PLAYA" })).rejects.toMatchObject({ code: "VALIDACION" });
+  });
+
+  it("crea el envío con la zona y el costo cotizados (sin zona → URBANA)", async () => {
+    const items = [{ tipoCarga: "TELA", cantidad: 4, pesoKg: 5 }, { tipoCarga: "PLUMON_GRANDE", cantidad: 1, pesoKg: 10 }];
+    const rural = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ items, zona: "RURAL" }));
+    expect(rural).toMatchObject({
+      zona: "RURAL",
+      costo: 10, // 4 × 1.50 + 4.00
+      items: [
+        { tipoCarga: "TELA", cantidad: 4, pesoKg: 5, costoUnitario: 1.5, subtotal: 6 },
+        { tipoCarga: "PLUMON_GRANDE", cantidad: 1, pesoKg: 10, costoUnitario: 4, subtotal: 4 },
+      ],
+    });
+    expect(rural.items[0]).not.toHaveProperty("mayoreo");
+    expect((await c.obtenerEnvio.ejecutar(rural.id)).zona).toBe("RURAL");
+    expect(await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ items }))).toMatchObject({ zona: "URBANA", costo: 9 });
   });
 
   it("crea el envío cobrando el costo cotizado", async () => {
@@ -45,7 +81,8 @@ describe("Cotizar y crear envío", () => {
     expect(e).toMatchObject({
       numeroGuia: 1,
       estado: "REGISTRADO",
-      costo: 8.9,
+      zona: "URBANA",
+      costo: 3,
       ruta: { id: 11, origen: "Ibarra", destino: "Quito" },
     });
     expect(e.historial).toEqual([
@@ -129,19 +166,19 @@ describe("Estados, consultas y seguimiento", () => {
 
     const r = await c.resumen.ejecutar();
     expect(r.totalEnvios).toBe(3);
-    expect(r.ingresos).toBe(12);
+    expect(r.ingresos).toBe(6);
     expect(r.porEstado).toMatchObject({ REGISTRADO: 2, CANCELADO: 1, ENTREGADO: 0 });
     expect(r.porTipo).toContainEqual({ tipoCarga: "SOBRE", piezas: 2 });
     expect(r.totalPiezas).toBe(3);
     expect(r.porFormaPago).toEqual([
       { formaPago: "PAGADO", envios: 1, monto: 0 },
-      { formaPago: "AL_COBRO", envios: 2, monto: 12 },
+      { formaPago: "AL_COBRO", envios: 2, monto: 6 },
       { formaPago: "CONTRATO", envios: 0, monto: 0 },
       { formaPago: "SEGURO", envios: 0, monto: 0 },
     ]);
-    expect(r.porRuta).toEqual([{ rutaId: 11, ruta: "Ibarra → Quito", total: 3, monto: 12 }]);
-    expect(r.porCobrar).toBe(12);
-    expect(r.porCliente).toEqual([{ clienteId: null, nombre: "Sin cliente registrado", envios: 3, monto: 12 }]);
+    expect(r.porRuta).toEqual([{ rutaId: 11, ruta: "Ibarra → Quito", total: 3, monto: 6 }]);
+    expect(r.porCobrar).toBe(6);
+    expect(r.porCliente).toEqual([{ clienteId: null, nombre: "Sin cliente registrado", envios: 3, monto: 6 }]);
   });
 
   it("filtra por cliente y periodo, con serie diaria continua en hora de Ecuador", async () => {
@@ -153,18 +190,18 @@ describe("Estados, consultas y seguimiento", () => {
     await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ remitente: { nombre: "Otro", telefono: "0980000000" } }));
 
     const delCliente = await c.resumen.ejecutar({ clienteId: tienda.id });
-    expect(delCliente).toMatchObject({ totalEnvios: 2, ingresos: 14.9 });
-    expect(delCliente.porCliente).toEqual([{ clienteId: tienda.id, nombre: "Tienda La Esquina", envios: 2, monto: 14.9 }]);
+    expect(delCliente).toMatchObject({ totalEnvios: 2, ingresos: 6 });
+    expect(delCliente.porCliente).toEqual([{ clienteId: tienda.id, nombre: "Tienda La Esquina", envios: 2, monto: 6 }]);
     expect(delCliente.porDia).toEqual([
-      { fecha: "2026-10-01", envios: 1, ingresos: 8.9 },
+      { fecha: "2026-10-01", envios: 1, ingresos: 3 },
       { fecha: "2026-10-02", envios: 0, ingresos: 0 },
-      { fecha: "2026-10-03", envios: 1, ingresos: 6 },
+      { fecha: "2026-10-03", envios: 1, ingresos: 3 },
     ]);
 
     const dia3 = await c.resumen.ejecutar({ desde: "2026-10-03", hasta: "2026-10-03" });
     expect(dia3.totalEnvios).toBe(2);
     expect(dia3.porCliente.map((p) => p.clienteId).sort()).toEqual([tienda.id, null].sort());
-    expect(dia3.porDia).toEqual([{ fecha: "2026-10-03", envios: 2, ingresos: 14.9 }]);
+    expect(dia3.porDia).toEqual([{ fecha: "2026-10-03", envios: 2, ingresos: 6 }]);
 
     await expect(c.resumen.ejecutar({ desde: "03/10/2026" })).rejects.toMatchObject({ code: "VALIDACION" });
     await expect(c.resumen.ejecutar({ desde: "2026-10-05", hasta: "2026-10-01" })).rejects.toMatchObject({
@@ -238,7 +275,7 @@ describe("Clientes frecuentes", () => {
     );
     expect(ocasional.clienteId).toBeNull();
 
-    expect((await c.listarClientes.ejecutar()).find((x) => x.id === maria.id)).toMatchObject({ envios: 3, monto: 26.7 });
+    expect((await c.listarClientes.ejecutar()).find((x) => x.id === maria.id)).toMatchObject({ envios: 3, monto: 9 });
     expect((await c.listarEnvios.ejecutar({ clienteId: tienda.id })).datos.map((e) => e.id)).toEqual([elegido.id]);
 
     await expect(
@@ -352,8 +389,9 @@ describe("Ciudades de cobertura", () => {
   it("ADMIN agrega una ciudad, crea su ruta y queda en el catálogo público", async () => {
     const cayambe = await c.crearCiudad.ejecutar(ADMIN, "  Cayambe ");
     expect(cayambe).toMatchObject({ nombre: "Cayambe", activa: true });
-    const ruta = await c.crearRuta.ejecutar(ADMIN, { origenId: 1, destinoId: cayambe.id, tarifaBase: 4, tiempoEstimadoMin: 75 });
+    const ruta = await c.crearRuta.ejecutar(ADMIN, { origenId: 1, destinoId: cayambe.id, tiempoEstimadoMin: 75 });
     expect(ruta.operativa).toBe(true);
+    expect(ruta).not.toHaveProperty("tarifaBase");
 
     const catalogo = await c.catalogoPublico.ejecutar();
     expect(catalogo.ciudades.map((x) => x.nombre)).toContain("Cayambe");
@@ -402,13 +440,16 @@ describe("Ciudades de cobertura", () => {
 
 describe("Gestión de rutas", () => {
   it("solo ADMIN crea o modifica rutas", async () => {
-    await expect(c.actualizarRuta.ejecutar(OPERADOR, 1, { tarifaBase: 9 })).rejects.toMatchObject({ code: "PROHIBIDO" });
-    expect((await c.actualizarRuta.ejecutar(ADMIN, 1, { tarifaBase: 2.25 })).tarifaBase).toBe(2.25);
+    await expect(c.actualizarRuta.ejecutar(OPERADOR, 1, { tiempoEstimadoMin: 50 })).rejects.toMatchObject({ code: "PROHIBIDO" });
+    const ruta = await c.actualizarRuta.ejecutar(ADMIN, 1, { tiempoEstimadoMin: 50 });
+    expect(ruta).toMatchObject({ id: 1, tiempoEstimadoMin: 50 });
+    expect(ruta).not.toHaveProperty("tarifaBase");
+    await expect(c.actualizarRuta.ejecutar(ADMIN, 1, { tiempoEstimadoMin: 0 })).rejects.toMatchObject({ code: "VALIDACION" });
   });
 
   it("no duplica rutas y valida ciudades", async () => {
-    await expect(c.crearRuta.ejecutar(ADMIN, { origenId: 1, destinoId: 4, tarifaBase: 6, tiempoEstimadoMin: 180 })).rejects.toMatchObject({ code: "CONFLICTO" });
-    await expect(c.crearRuta.ejecutar(ADMIN, { origenId: 1, destinoId: 99, tarifaBase: 6, tiempoEstimadoMin: 180 })).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+    await expect(c.crearRuta.ejecutar(ADMIN, { origenId: 1, destinoId: 4, tiempoEstimadoMin: 180 })).rejects.toMatchObject({ code: "CONFLICTO" });
+    await expect(c.crearRuta.ejecutar(ADMIN, { origenId: 1, destinoId: 99, tiempoEstimadoMin: 180 })).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
   });
 
   it("siembra las rutas entre Ibarra, Atuntaqui, Otavalo y Quito", async () => {

@@ -2,6 +2,7 @@ import { esTipoCarga, type TipoCarga } from "../../../domain/carga/TipoCarga.js"
 import { esOperativa, type Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import { cotizarItems, type Cotizacion } from "../../../domain/tarifa/calcularTarifa.js";
+import { esZona, ZONA_POR_DEFECTO } from "../../../domain/tarifa/Zona.js";
 import type { RutaRepository, TipoCargaRepository } from "../../ports/repositories.js";
 
 export interface ItemSolicitud {
@@ -14,6 +15,8 @@ export interface ItemSolicitud {
 export interface SolicitudCotizacion {
   rutaId: number;
   items: ItemSolicitud[];
+  /** Zona de entrega: URBANA (por defecto) o RURAL. */
+  zona?: string | null;
 }
 
 export class CotizarEnvio {
@@ -28,6 +31,8 @@ export class CotizarEnvio {
 
   /** Reutilizado por CrearEnvio para garantizar que el costo cobrado es el cotizado. */
   async resolver(s: SolicitudCotizacion): Promise<{ ruta: Ruta; cotizacion: Cotizacion }> {
+    const zona = s.zona ?? ZONA_POR_DEFECTO;
+    if (!esZona(zona)) throw new DomainError("VALIDACION", `Zona de entrega desconocida: ${zona}`);
     const ruta = await this.rutas.buscarPorId(s.rutaId);
     if (!ruta) throw new DomainError("NO_ENCONTRADO", "Ruta no encontrada");
     if (!esOperativa(ruta)) {
@@ -40,6 +45,7 @@ export class CotizarEnvio {
       if (!tipo) throw new DomainError("VALIDACION", `Tipo de carga desconocido: ${i.tipoCarga}`);
       return { tipo, cantidad: i.cantidad, pesoKg: i.pesoKg };
     });
-    return { ruta, cotizacion: cotizarItems(ruta.tarifaBase, items) };
+    // La ruta solo determina el trayecto: el precio depende del tipo de carga y la zona.
+    return { ruta, cotizacion: cotizarItems(items, zona) };
   }
 }

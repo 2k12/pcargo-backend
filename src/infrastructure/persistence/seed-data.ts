@@ -11,40 +11,51 @@ export const CIUDADES: Ciudad[] = [
   { id: 4, nombre: "Quito", activa: true },
 ];
 
+/** Catálogo de tipos de carga (contrato v8): precio por unidad; la ruta no influye. El orden es el del catálogo. */
 export const TIPOS_CARGA_SEED: TipoCarga[] = [
-  { codigo: "SOBRE", nombre: "Sobre", factor: 1.0, pesoIncluidoKg: 0.5, pesoMaxKg: 0.5 },
-  { codigo: "PAQUETE", nombre: "Paquete", factor: 1.4, pesoIncluidoKg: 2, pesoMaxKg: 30 },
-  { codigo: "CARTON", nombre: "Cartón", factor: 1.6, pesoIncluidoKg: 2, pesoMaxKg: 40 },
-  { codigo: "VALIJA", nombre: "Valija", factor: 1.8, pesoIncluidoKg: 2, pesoMaxKg: 25 },
+  { codigo: "SOBRE", nombre: "Sobre", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 0.5 },
+  { codigo: "PAQUETE", nombre: "Paquete", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 50 },
+  { codigo: "CARTON", nombre: "Cartón", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 35 },
+  { codigo: "VALIJA", nombre: "Valija", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 25 },
+  {
+    codigo: "TELA",
+    nombre: "Rollo de tela",
+    precio: 1.25,
+    precioRural: 1.5,
+    mayoreo: { minimoExclusivo: 50, precio: 1 },
+    pesoMaxKg: 50,
+  },
+  // Tela y plumón son variantes de paquete: heredan su peso máximo.
+  { codigo: "PLUMON_PEQUENO", nombre: "Plumón pequeño", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 50 },
+  { codigo: "PLUMON_GRANDE", nombre: "Plumón grande", precio: 4, precioRural: null, mayoreo: null, pesoMaxKg: 50 },
 ];
 
-/** [origenId, destinoId, tarifaBase USD, minutos]. Las interurbanas se siembran en ambos sentidos. */
-const URBANAS: [number, number, number, number][] = [
-  [1, 1, 2.0, 60],
-  [2, 2, 1.75, 45],
-  [3, 3, 1.75, 45],
-  [4, 4, 3.0, 120],
+/** [origenId, destinoId, minutos]. Las interurbanas se siembran en ambos sentidos. Las rutas no tienen tarifa (v8). */
+const URBANAS: [number, number, number][] = [
+  [1, 1, 60],
+  [2, 2, 45],
+  [3, 3, 45],
+  [4, 4, 120],
 ];
-const INTERURBANAS: [number, number, number, number][] = [
-  [1, 2, 2.5, 30],
-  [1, 3, 3.0, 45],
-  [2, 3, 2.5, 30],
-  [1, 4, 6.0, 180],
-  [2, 4, 5.5, 165],
-  [3, 4, 5.0, 150],
+const INTERURBANAS: [number, number, number][] = [
+  [1, 2, 30],
+  [1, 3, 45],
+  [2, 3, 30],
+  [1, 4, 180],
+  [2, 4, 165],
+  [3, 4, 150],
 ];
 
 export const RUTAS_SEED = [
   ...URBANAS,
-  ...INTERURBANAS.flatMap(([o, d, t, m]) => [
-    [o, d, t, m],
-    [d, o, t, m],
+  ...INTERURBANAS.flatMap(([o, d, m]) => [
+    [o, d, m],
+    [d, o, m],
   ]),
-].map(([origenId, destinoId, tarifaBase, tiempoEstimadoMin], i) => ({
+].map(([origenId, destinoId, tiempoEstimadoMin], i) => ({
   id: i + 1,
   origenId: origenId!,
   destinoId: destinoId!,
-  tarifaBase: tarifaBase!,
   tiempoEstimadoMin: tiempoEstimadoMin!,
 }));
 

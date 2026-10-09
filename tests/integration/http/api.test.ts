@@ -24,6 +24,17 @@ beforeAll(async () => {
 
 const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
 
+/** Catálogo de tipos de carga del contrato v8, tal como lo devuelve la API. */
+const TIPOS_V8 = [
+  { codigo: "SOBRE", nombre: "Sobre", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 0.5 },
+  { codigo: "PAQUETE", nombre: "Paquete", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 50 },
+  { codigo: "CARTON", nombre: "Cartón", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 35 },
+  { codigo: "VALIJA", nombre: "Valija", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 25 },
+  { codigo: "TELA", nombre: "Rollo de tela", precio: 1.25, precioRural: 1.5, mayoreo: { minimoExclusivo: 50, precio: 1 }, pesoMaxKg: 50 },
+  { codigo: "PLUMON_PEQUENO", nombre: "Plumón pequeño", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 50 },
+  { codigo: "PLUMON_GRANDE", nombre: "Plumón grande", precio: 4, precioRural: null, mayoreo: null, pesoMaxKg: 50 },
+];
+
 describe("Autenticación", () => {
   it("GET /health es público", async () => {
     await request(app).get("/api/health").expect(200, { status: "ok" });
@@ -58,9 +69,12 @@ describe("Catálogos", () => {
     const ciudades = await request(app).get("/api/ciudades").set(auth(tokenOperador)).expect(200);
     expect(ciudades.body.map((c: { nombre: string }) => c.nombre)).toEqual(["Atuntaqui", "Ibarra", "Otavalo", "Quito"]);
     const tipos = await request(app).get("/api/tipos-carga").set(auth(tokenOperador)).expect(200);
-    expect(tipos.body.map((t: { codigo: string }) => t.codigo)).toEqual(["SOBRE", "PAQUETE", "CARTON", "VALIJA"]);
+    expect(tipos.body.map((t: { codigo: string }) => t.codigo)).toEqual(["SOBRE", "PAQUETE", "CARTON", "VALIJA", "TELA", "PLUMON_PEQUENO", "PLUMON_GRANDE"]);
+    expect(tipos.body).toEqual(TIPOS_V8);
     const rutas = await request(app).get("/api/rutas?activa=true").set(auth(tokenOperador)).expect(200);
     expect(rutas.body).toHaveLength(16);
+    expect(rutas.body.some((r: object) => "tarifaBase" in r)).toBe(false);
+    expect(Object.keys(rutas.body[0]).sort()).toEqual(["activa", "destino", "id", "operativa", "origen", "tiempoEstimadoMin"]);
   });
 });
 
@@ -72,15 +86,26 @@ describe("Web pública (sin sesión)", () => {
 
     const r = await request(app2).get("/api/publico/catalogo").expect(200);
     expect(r.body.ciudades).toHaveLength(4);
-    expect(r.body.tiposCarga.map((t: { codigo: string }) => t.codigo)).toEqual(["SOBRE", "PAQUETE", "CARTON", "VALIJA"]);
+    expect(r.body.tiposCarga).toEqual(TIPOS_V8);
     expect(r.body.rutas).toHaveLength(15);
     expect(r.body.rutas.every((x: { activa: boolean }) => x.activa)).toBe(true);
+    expect(r.body.rutas.some((x: object) => "tarifaBase" in x)).toBe(false);
   });
 
-  it("POST /publico/cotizar cotiza sin token y valida la entrada", async () => {
+  it("POST /publico/cotizar cotiza sin token por tipo y zona, y valida la entrada", async () => {
     const r = await request(app).post("/api/publico/cotizar").send({ rutaId: 11, ...item("SOBRE", 0.3) }).expect(200);
-    expect(r.body.costo).toBe(6);
+    expect(r.body).toEqual({
+      costo: 3,
+      zona: "URBANA",
+      totalPiezas: 1,
+      pesoTotalKg: 0.3,
+      items: [{ tipoCarga: "SOBRE", cantidad: 1, pesoKg: 0.3, costoUnitario: 3, subtotal: 3, mayoreo: false }],
+    });
+    const rural = await request(app).post("/api/publico/cotizar").send({ rutaId: 1, zona: "RURAL", ...item("TELA", 3, 10) }).expect(200);
+    expect(rural.body).toMatchObject({ zona: "RURAL", costo: 15, items: [{ costoUnitario: 1.5, mayoreo: false }] });
     await request(app).post("/api/publico/cotizar").send({ rutaId: 11 }).expect(400);
+    const zonaMala = await request(app).post("/api/publico/cotizar").send({ rutaId: 11, zona: "rural", ...item("TELA", 1) }).expect(400);
+    expect(zonaMala.body.error.code).toBe("VALIDACION");
   });
 
   it("los endpoints públicos no exponen la gestión", async () => {
@@ -145,24 +170,40 @@ describe("Ciudades de cobertura (ADMIN)", () => {
 
 describe("Gestión de rutas (ADMIN)", () => {
   it("OPERADOR recibe 403 al modificar rutas", async () => {
-    await request(app).patch("/api/rutas/1").set(auth(tokenOperador)).send({ tarifaBase: 9 }).expect(403);
+    await request(app).patch("/api/rutas/1").set(auth(tokenOperador)).send({ tiempoEstimadoMin: 50 }).expect(403);
   });
 
-  it("ADMIN actualiza tarifa y estado", async () => {
-    const r = await request(app).patch("/api/rutas/2").set(auth(tokenAdmin)).send({ tarifaBase: 1.9, activa: false }).expect(200);
-    expect(r.body).toMatchObject({ id: 2, tarifaBase: 1.9, activa: false });
+  it("ADMIN actualiza tiempo y estado; la respuesta no trae tarifaBase", async () => {
+    const r = await request(app).patch("/api/rutas/2").set(auth(tokenAdmin)).send({ tiempoEstimadoMin: 40, activa: false }).expect(200);
+    expect(r.body).toMatchObject({ id: 2, tiempoEstimadoMin: 40, activa: false, operativa: false });
+    expect(r.body).not.toHaveProperty("tarifaBase");
+  });
+
+  it("POST /rutas crea sin tarifaBase (201) y no la devuelve", async () => {
+    const { body: ciudad } = await request(app).post("/api/ciudades").set(auth(tokenAdmin)).send({ nombre: "Cotacachi" }).expect(201);
+    const r = await request(app)
+      .post("/api/rutas")
+      .set(auth(tokenAdmin))
+      .send({ origenId: 1, destinoId: ciudad.id, tiempoEstimadoMin: 35 })
+      .expect(201);
+    expect(r.body).toMatchObject({ origen: { id: 1 }, destino: { id: ciudad.id }, tiempoEstimadoMin: 35, activa: true, operativa: true });
+    expect(r.body).not.toHaveProperty("tarifaBase");
+    // la nueva ruta cotiza igual que cualquier otra: el precio depende solo del tipo
+    const cot = await request(app).post("/api/envios/cotizar").set(auth(tokenOperador)).send({ rutaId: r.body.id, ...item("PLUMON_GRANDE", 20) }).expect(200);
+    expect(cot.body.costo).toBe(4);
   });
 
   it("ADMIN no puede duplicar una ruta → 409", async () => {
     await request(app)
       .post("/api/rutas")
       .set(auth(tokenAdmin))
-      .send({ origenId: 1, destinoId: 2, tarifaBase: 3, tiempoEstimadoMin: 30 })
+      .send({ origenId: 1, destinoId: 2, tiempoEstimadoMin: 30 })
       .expect(409);
   });
 
-  it("PATCH vacío → 400", async () => {
+  it("PATCH vacío o solo con tarifaBase (ya no existe) → 400", async () => {
     await request(app).patch("/api/rutas/1").set(auth(tokenAdmin)).send({}).expect(400);
+    await request(app).patch("/api/rutas/1").set(auth(tokenAdmin)).send({ tarifaBase: 9 }).expect(400);
   });
 });
 
@@ -174,11 +215,11 @@ describe("Flujo de un envío", () => {
       .send({ rutaId: 11, ...item("CARTON", 5, 3) })
       .expect(200);
     expect(cot.body).toEqual({
-      costo: 33.3,
-      tarifaBase: 6,
+      costo: 9,
+      zona: "URBANA",
       totalPiezas: 3,
       pesoTotalKg: 15,
-      items: [{ tipoCarga: "CARTON", cantidad: 3, pesoKg: 5, factor: 1.6, recargoPeso: 1.5, costoUnitario: 11.1, subtotal: 33.3 }],
+      items: [{ tipoCarga: "CARTON", cantidad: 3, pesoKg: 5, costoUnitario: 3, subtotal: 9, mayoreo: false }],
     });
 
     const creado = await request(app)
@@ -188,11 +229,12 @@ describe("Flujo de un envío", () => {
       .expect(201);
     expect(creado.body).toMatchObject({
       estado: "REGISTRADO",
-      costo: 33.3,
+      costo: 9,
+      zona: "URBANA",
       totalPiezas: 3,
       pesoTotalKg: 15,
       formaPago: "AL_COBRO",
-      items: [{ tipoCarga: "CARTON", cantidad: 3, pesoKg: 5, costoUnitario: 11.1, subtotal: 33.3 }],
+      items: [{ tipoCarga: "CARTON", cantidad: 3, pesoKg: 5, costoUnitario: 3, subtotal: 9 }],
       registro: { operador: "Operador Ibarra" },
       entrega: null,
     });
@@ -218,6 +260,41 @@ describe("Flujo de un envío", () => {
 
     const resumen = await request(app).get("/api/dashboard/resumen").set(auth(tokenOperador)).expect(200);
     expect(resumen.body.porEstado.ENTREGADO).toBeGreaterThanOrEqual(1);
+  });
+
+  it("crea un envío RURAL con tela por mayoreo: guarda zona, ítems y costo", async () => {
+    const items = [
+      { tipoCarga: "TELA", cantidad: 30, pesoKg: 4 },
+      { tipoCarga: "PLUMON_PEQUENO", cantidad: 2, pesoKg: 6 },
+      { tipoCarga: "TELA", cantidad: 25, pesoKg: 4 },
+    ];
+    const cot = await request(app).post("/api/envios/cotizar").set(auth(tokenOperador)).send({ rutaId: 11, zona: "RURAL", items }).expect(200);
+    expect(cot.body).toMatchObject({ zona: "RURAL", costo: 61, totalPiezas: 57 }); // 55 × 1.00 + 2 × 3.00
+
+    const creado = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ zona: "RURAL", items })).expect(201);
+    expect(creado.body).toMatchObject({
+      zona: "RURAL",
+      costo: 61,
+      items: [
+        { tipoCarga: "TELA", cantidad: 30, costoUnitario: 1, subtotal: 30 },
+        { tipoCarga: "PLUMON_PEQUENO", cantidad: 2, costoUnitario: 3, subtotal: 6 },
+        { tipoCarga: "TELA", cantidad: 25, costoUnitario: 1, subtotal: 25 },
+      ],
+    });
+    const detalle = await request(app).get(`/api/envios/${creado.body.id}`).set(auth(tokenOperador)).expect(200);
+    expect(detalle.body).toMatchObject({ zona: "RURAL", costo: 61 });
+    const sinZona = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio()).expect(201);
+    expect(sinZona.body).toMatchObject({ zona: "URBANA", costo: 3 });
+    await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio({ zona: "CENTRO" })).expect(400);
+  });
+
+  it("pesos máximos v8: paquete 50 kg y cartón 35 kg", async () => {
+    const cotizar = (tipo: string, peso: number) =>
+      request(app).post("/api/envios/cotizar").set(auth(tokenOperador)).send({ rutaId: 11, ...item(tipo, peso) });
+    await cotizar("PAQUETE", 50).expect(200);
+    expect((await cotizar("PAQUETE", 50.5).expect(422)).body.error.code).toBe("PESO_INVALIDO");
+    await cotizar("CARTON", 35).expect(200);
+    expect((await cotizar("CARTON", 36).expect(422)).body.error.code).toBe("PESO_INVALIDO");
   });
 
   it("transición inválida → 422; peso excedido → 422; ruta inactiva → 422", async () => {

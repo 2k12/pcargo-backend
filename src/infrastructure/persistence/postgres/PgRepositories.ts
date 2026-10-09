@@ -15,6 +15,7 @@ import { Envio, type EventoHistorial, type ItemEnvio } from "../../../domain/env
 import type { EstadoEnvio } from "../../../domain/envio/EstadoEnvio.js";
 import type { FormaPago } from "../../../domain/envio/FormaPago.js";
 import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
+import type { Zona } from "../../../domain/tarifa/Zona.js";
 import type { Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Db } from "./pool.js";
@@ -81,18 +82,42 @@ export class PgCiudadRepository implements CiudadRepository {
   }
 }
 
+interface TipoCargaRow {
+  codigo: TipoCargaCodigo;
+  nombre: string;
+  precio: number;
+  precio_rural: number | null;
+  mayoreo_minimo_exclusivo: number | null;
+  mayoreo_precio: number | null;
+  peso_max_kg: number;
+}
+
+const aTipoCarga = (r: TipoCargaRow): TipoCarga => ({
+  codigo: r.codigo,
+  nombre: r.nombre,
+  precio: r.precio,
+  precioRural: r.precio_rural,
+  mayoreo:
+    r.mayoreo_minimo_exclusivo === null || r.mayoreo_precio === null
+      ? null
+      : { minimoExclusivo: r.mayoreo_minimo_exclusivo, precio: r.mayoreo_precio },
+  pesoMaxKg: r.peso_max_kg,
+});
+
 export class PgTipoCargaRepository implements TipoCargaRepository {
-  private static readonly SELECT = `SELECT codigo, nombre, factor, peso_incluido_kg AS "pesoIncluidoKg",
-    peso_max_kg AS "pesoMaxKg" FROM tipos_carga`;
+  private static readonly SELECT = `SELECT codigo, nombre, precio, precio_rural, mayoreo_minimo_exclusivo,
+    mayoreo_precio, peso_max_kg FROM tipos_carga`;
 
   constructor(private readonly db: Db) {}
 
   async listar(): Promise<TipoCarga[]> {
-    return (await this.db.query(`${PgTipoCargaRepository.SELECT} ORDER BY factor`)).rows;
+    const { rows } = await this.db.query<TipoCargaRow>(`${PgTipoCargaRepository.SELECT} ORDER BY orden, codigo`);
+    return rows.map(aTipoCarga);
   }
 
   async buscarPorCodigo(codigo: TipoCargaCodigo): Promise<TipoCarga | null> {
-    return (await this.db.query(`${PgTipoCargaRepository.SELECT} WHERE codigo = $1`, [codigo])).rows[0] ?? null;
+    const { rows } = await this.db.query<TipoCargaRow>(`${PgTipoCargaRepository.SELECT} WHERE codigo = $1`, [codigo]);
+    return rows[0] ? aTipoCarga(rows[0]) : null;
   }
 }
 
@@ -104,7 +129,6 @@ interface RutaRow {
   destino_id: number;
   destino_nombre: string;
   destino_activa: boolean;
-  tarifa_base: number;
   tiempo_estimado_min: number;
   activa: boolean;
 }
@@ -112,7 +136,7 @@ interface RutaRow {
 const SELECT_RUTA = `
   SELECT r.id, r.origen_id, o.nombre AS origen_nombre, o.activa AS origen_activa,
          r.destino_id, d.nombre AS destino_nombre, d.activa AS destino_activa,
-         r.tarifa_base, r.tiempo_estimado_min, r.activa
+         r.tiempo_estimado_min, r.activa
     FROM rutas r
     JOIN ciudades o ON o.id = r.origen_id
     JOIN ciudades d ON d.id = r.destino_id`;
@@ -121,7 +145,6 @@ const aRuta = (r: RutaRow): Ruta => ({
   id: r.id,
   origen: { id: r.origen_id, nombre: r.origen_nombre, activa: r.origen_activa },
   destino: { id: r.destino_id, nombre: r.destino_nombre, activa: r.destino_activa },
-  tarifaBase: r.tarifa_base,
   tiempoEstimadoMin: r.tiempo_estimado_min,
   activa: r.activa,
 });
@@ -159,20 +182,19 @@ export class PgRutaRepository implements RutaRepository {
 
   async crear(d: NuevaRuta): Promise<Ruta> {
     const { rows } = await this.db.query<{ id: number }>(
-      `INSERT INTO rutas (origen_id, destino_id, tarifa_base, tiempo_estimado_min)
-       VALUES ($1, $2, $3, $4) RETURNING id`,
-      [d.origenId, d.destinoId, d.tarifaBase, d.tiempoEstimadoMin],
+      `INSERT INTO rutas (origen_id, destino_id, tiempo_estimado_min)
+       VALUES ($1, $2, $3) RETURNING id`,
+      [d.origenId, d.destinoId, d.tiempoEstimadoMin],
     );
     return (await this.buscarPorId(rows[0]!.id))!;
   }
 
   async actualizar(id: number, c: CambiosRuta): Promise<Ruta> {
     await this.db.query(
-      `UPDATE rutas SET tarifa_base = COALESCE($2, tarifa_base),
-                        tiempo_estimado_min = COALESCE($3, tiempo_estimado_min),
-                        activa = COALESCE($4, activa)
+      `UPDATE rutas SET tiempo_estimado_min = COALESCE($2, tiempo_estimado_min),
+                        activa = COALESCE($3, activa)
         WHERE id = $1`,
-      [id, c.tarifaBase ?? null, c.tiempoEstimadoMin ?? null, c.activa ?? null],
+      [id, c.tiempoEstimadoMin ?? null, c.activa ?? null],
     );
     return (await this.buscarPorId(id))!;
   }
@@ -188,6 +210,7 @@ interface EnvioRow {
   destinatario_telefono: string;
   destinatario_direccion: string;
   ruta_id: number;
+  zona: Zona;
   descripcion: string | null;
   costo: number;
   forma_pago: FormaPago;
@@ -227,15 +250,15 @@ export class PgEnvioRepository implements EnvioRepository {
       const upsert = await client.query<{ nuevo: boolean }>(
         `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,
             destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, descripcion,
-            costo, forma_pago, estado, creado_por, creado_en, actualizado_en, cliente_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+            costo, forma_pago, estado, creado_por, creado_en, actualizado_en, cliente_id, zona)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
          ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en
          RETURNING (xmax = 0) AS nuevo`,
         [
           s.id, s.numeroGuia, s.remitente.nombre, s.remitente.telefono, s.destinatario.nombre,
           s.destinatario.telefono, s.destinatario.direccion, s.rutaId, envio.totalPiezas, envio.pesoTotalKg,
           s.descripcion, s.costo, s.formaPago, s.estado, s.creadoPor, s.creadoEn, s.actualizadoEn,
-          s.clienteId ?? null,
+          s.clienteId ?? null, s.zona,
         ],
       );
       if (upsert.rows[0]?.nuevo) {
@@ -378,6 +401,7 @@ export class PgEnvioRepository implements EnvioRepository {
         },
         rutaId: r.ruta_id,
         items: itemsPorEnvio.get(r.id) ?? [],
+        zona: r.zona,
         formaPago: r.forma_pago,
         descripcion: r.descripcion,
         costo: r.costo,

@@ -37,12 +37,10 @@ export interface TipoCargaRepository {
 export interface NuevaRuta {
   origenId: number;
   destinoId: number;
-  tarifaBase: number;
   tiempoEstimadoMin: number;
 }
 
 export interface CambiosRuta {
-  tarifaBase?: number;
   tiempoEstimadoMin?: number;
   activa?: boolean;
 }

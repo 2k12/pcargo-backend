@@ -75,13 +75,17 @@ export class InMemoryCiudadRepository implements CiudadRepository {
   }
 }
 
+/** Copia profunda: quien lee el catálogo no puede alterar la semilla compartida. */
+const copiaTipo = (t: TipoCarga): TipoCarga => ({ ...t, mayoreo: t.mayoreo && { ...t.mayoreo } });
+
 export class InMemoryTipoCargaRepository implements TipoCargaRepository {
   constructor(private readonly tipos: TipoCarga[] = TIPOS_CARGA_SEED) {}
   async listar(): Promise<TipoCarga[]> {
-    return [...this.tipos];
+    return this.tipos.map(copiaTipo);
   }
   async buscarPorCodigo(codigo: TipoCargaCodigo): Promise<TipoCarga | null> {
-    return this.tipos.find((t) => t.codigo === codigo) ?? null;
+    const t = this.tipos.find((x) => x.codigo === codigo);
+    return t ? copiaTipo(t) : null;
   }
 }
 
@@ -109,7 +113,6 @@ export class InMemoryRutaRepository implements RutaRepository {
       id: f.id,
       origen: ciudad(f.origenId),
       destino: ciudad(f.destinoId),
-      tarifaBase: f.tarifaBase,
       tiempoEstimadoMin: f.tiempoEstimadoMin,
       activa: f.activa,
     };

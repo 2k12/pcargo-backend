@@ -15,6 +15,8 @@ export interface SolicitudEnvio {
   destinatario: Destinatario;
   rutaId: number;
   items: ItemSolicitud[];
+  /** Zona de entrega: URBANA (por defecto) o RURAL. Queda guardada en el envío. */
+  zona?: string | null;
   formaPago: string;
   descripcion?: string | null;
   /** Número de la guía física. Vacío → consecutivo automático. */
@@ -52,6 +54,7 @@ export class CrearEnvio {
         costoUnitario,
         subtotal,
       })),
+      zona: cotizacion.zona,
       formaPago: s.formaPago,
       descripcion: s.descripcion,
     };

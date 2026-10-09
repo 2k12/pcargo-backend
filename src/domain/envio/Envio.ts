@@ -1,5 +1,6 @@
 import type { TipoCargaCodigo } from "../carga/TipoCarga.js";
 import { DomainError, redondear2 } from "../shared/DomainError.js";
+import { ZONA_POR_DEFECTO, type Zona } from "../tarifa/Zona.js";
 import type { Actor } from "../usuario/Usuario.js";
 import {
   esResultadoEntrega,
@@ -55,6 +56,8 @@ export interface EnvioProps {
   destinatario: Destinatario;
   rutaId: number;
   items: ItemEnvio[];
+  /** Zona de entrega con la que se cotizó (los envíos anteriores a v8 son URBANA). */
+  zona: Zona;
   formaPago: FormaPago;
   descripcion: string | null;
   costo: number;
@@ -74,6 +77,8 @@ export interface NuevoEnvio {
   formaPago: FormaPago;
   descripcion?: string | null;
   clienteId?: string | null;
+  /** Por defecto URBANA. */
+  zona?: Zona;
 }
 
 const TELEFONO = /^\+?[0-9 ]{7,15}$/;
@@ -109,6 +114,7 @@ export class Envio {
       },
       rutaId: datos.rutaId,
       items: datos.items.map((i) => ({ ...i })),
+      zona: datos.zona ?? ZONA_POR_DEFECTO,
       formaPago: datos.formaPago,
       descripcion: datos.descripcion?.trim() || null,
       costo: redondear2(datos.items.reduce((s, i) => s + i.subtotal, 0)),
@@ -153,6 +159,9 @@ export class Envio {
   }
   get clienteId(): string | null {
     return this.props.clienteId ?? null;
+  }
+  get zona(): Zona {
+    return this.props.zona;
   }
   get rutaId(): number {
     return this.props.rutaId;

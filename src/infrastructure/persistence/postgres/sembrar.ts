@@ -10,19 +10,23 @@ export async function sembrar(db: Db, rondasBcrypt = 10): Promise<void> {
   }
   await db.query("SELECT setval('ciudades_id_seq', (SELECT max(id) FROM ciudades))");
 
-  for (const t of TIPOS_CARGA_SEED) {
+  for (const [i, t] of TIPOS_CARGA_SEED.entries()) {
     await db.query(
-      `INSERT INTO tipos_carga (codigo, nombre, factor, peso_incluido_kg, peso_max_kg)
-       VALUES ($1, $2, $3, $4, $5) ON CONFLICT (codigo) DO NOTHING`,
-      [t.codigo, t.nombre, t.factor, t.pesoIncluidoKg, t.pesoMaxKg],
+      `INSERT INTO tipos_carga
+         (codigo, nombre, precio, precio_rural, mayoreo_minimo_exclusivo, mayoreo_precio, peso_max_kg, orden)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (codigo) DO NOTHING`,
+      [
+        t.codigo, t.nombre, t.precio, t.precioRural, t.mayoreo?.minimoExclusivo ?? null,
+        t.mayoreo?.precio ?? null, t.pesoMaxKg, i + 1,
+      ],
     );
   }
 
   for (const r of RUTAS_SEED) {
     await db.query(
-      `INSERT INTO rutas (origen_id, destino_id, tarifa_base, tiempo_estimado_min)
-       VALUES ($1, $2, $3, $4) ON CONFLICT (origen_id, destino_id) DO NOTHING`,
-      [r.origenId, r.destinoId, r.tarifaBase, r.tiempoEstimadoMin],
+      `INSERT INTO rutas (origen_id, destino_id, tiempo_estimado_min)
+       VALUES ($1, $2, $3) ON CONFLICT (origen_id, destino_id) DO NOTHING`,
+      [r.origenId, r.destinoId, r.tiempoEstimadoMin],
     );
   }
 

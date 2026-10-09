@@ -100,6 +100,25 @@ describe.each(almacenes)("Caché y límite de tasa (%s)", (_nombre, crearAlmacen
     await request(app).patch("/api/ciudades/2").set(auth(tokenAdmin)).send({ nombre: "Atuntaqui" }).expect(200);
   });
 
+  it("no sirve entradas del catálogo con la forma de v7 (tipos con factor, rutas con tarifaBase)", async () => {
+    const tiposV7 = [{ codigo: "SOBRE", nombre: "Sobre", factor: 1, pesoIncluidoKg: 0.5, pesoMaxKg: 0.5 }];
+    await almacen.cache.guardar("catalogo:publico", { ciudades: [], tiposCarga: tiposV7, rutas: [] }, 300);
+    await almacen.cache.guardar("catalogo:tipos-carga", tiposV7, 300);
+    await almacen.cache.guardar("catalogo:repo-rutas:todas", [{ id: 1, tarifaBase: 2 }], 300);
+
+    const publico = (await request(app).get("/api/publico/catalogo").expect(200)).body;
+    expect(publico.tiposCarga).toHaveLength(7);
+    expect(publico.tiposCarga[0]).toEqual({ codigo: "SOBRE", nombre: "Sobre", precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 0.5 });
+    expect(publico.rutas.some((r: object) => "tarifaBase" in r)).toBe(false);
+    const tipos = (await request(app).get("/api/tipos-carga").set(auth(token)).expect(200)).body;
+    expect(tipos.map((t: { codigo: string }) => t.codigo)).toContain("PLUMON_GRANDE");
+    const rutas = (await request(app).get("/api/rutas").set(auth(token)).expect(200)).body;
+    expect(rutas.length).toBeGreaterThan(1);
+    // la cotización no se cachea: siempre usa el precio por tipo vigente
+    const cot = (await request(app).post("/api/publico/cotizar").send({ rutaId: 11, zona: "RURAL", items: [{ tipoCarga: "TELA", cantidad: 2, pesoKg: 1 }] }).expect(200)).body;
+    expect(cot).toMatchObject({ zona: "RURAL", costo: 3 });
+  });
+
   it("limita los intentos de login por IP y correo con 429 DEMASIADAS_SOLICITUDES", async () => {
     const intento = () => request(app).post("/api/auth/login").send({ email: "nadie@pcargo.ec", password: "x" });
     for (let i = 0; i < 10; i++) await intento().expect(401);

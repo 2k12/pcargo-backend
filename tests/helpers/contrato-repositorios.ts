@@ -4,8 +4,10 @@ import type {
   ClienteRepository,
   EnvioRepository,
   RutaRepository,
+  TipoCargaRepository,
 } from "../../src/application/ports/repositories.js";
 import { Envio } from "../../src/domain/envio/Envio.js";
+import { TIPOS_CARGA_SEED } from "../../src/infrastructure/persistence/seed-data.js";
 import { OPERADOR, solicitudEnvio } from "./fakes.js";
 
 export interface FabricaRepos {
@@ -13,6 +15,7 @@ export interface FabricaRepos {
   rutas: RutaRepository;
   ciudades: CiudadRepository;
   clientes: ClienteRepository;
+  tiposCarga: TipoCargaRepository;
 }
 
 /**
@@ -186,6 +189,54 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(editado.consentimientoEn).toEqual(primera);
     });
 
+    it("guarda la zona de entrega del envío (URBANA por defecto) y tipos de carga nuevos en los ítems", async () => {
+      const urbano = nuevoEnvio(5);
+      await repos.envios.guardar(urbano);
+      expect((await repos.envios.buscarPorId(urbano.id))?.zona).toBe("URBANA");
+
+      n++;
+      const rural = Envio.crear(
+        {
+          ...solicitudEnvio(),
+          formaPago: "PAGADO",
+          zona: "RURAL",
+          items: [
+            { tipoCarga: "TELA", cantidad: 51, pesoKg: 3, costoUnitario: 1, subtotal: 51 },
+            { tipoCarga: "PLUMON_PEQUENO", cantidad: 1, pesoKg: 5, costoUnitario: 3, subtotal: 3 },
+            { tipoCarga: "PLUMON_GRANDE", cantidad: 2, pesoKg: 8, costoUnitario: 4, subtotal: 8 },
+          ],
+        } as Parameters<typeof Envio.crear>[0],
+        { id: `00000000-0000-4000-b000-${String(n).padStart(12, "0")}`, numeroGuia: 70000 + n, ahora: new Date(Date.UTC(2026, 9, 1, 15)), actor: OPERADOR },
+      );
+      await repos.envios.guardar(rural);
+      rural.cambiarEstado("EN_TRANSITO", { ahora: new Date(Date.UTC(2026, 9, 1, 16)), actor: OPERADOR });
+      await repos.envios.guardar(rural); // el upsert no pierde la zona
+      const leido = (await repos.envios.buscarPorId(rural.id))!;
+      expect(leido.toSnapshot()).toMatchObject({
+        zona: "RURAL",
+        costo: 62,
+        items: [
+          { tipoCarga: "TELA", cantidad: 51, costoUnitario: 1, subtotal: 51 },
+          { tipoCarga: "PLUMON_PEQUENO", cantidad: 1, costoUnitario: 3, subtotal: 3 },
+          { tipoCarga: "PLUMON_GRANDE", cantidad: 2, costoUnitario: 4, subtotal: 8 },
+        ],
+      });
+      expect((await repos.envios.listar({ estado: "EN_TRANSITO" })).find((e) => e.id === rural.id)?.zona).toBe("RURAL");
+    });
+
+    it("lista los 7 tipos de carga con precio, precio rural, mayoreo y peso máximo (igual que la semilla)", async () => {
+      expect(await repos.tiposCarga.listar()).toEqual(TIPOS_CARGA_SEED);
+      expect(await repos.tiposCarga.buscarPorCodigo("TELA")).toEqual({
+        codigo: "TELA",
+        nombre: "Rollo de tela",
+        precio: 1.25,
+        precioRural: 1.5,
+        mayoreo: { minimoExclusivo: 50, precio: 1 },
+        pesoMaxKg: 50,
+      });
+      expect(await repos.tiposCarga.buscarPorCodigo("CARTON")).toMatchObject({ precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 35 });
+    });
+
     it("devuelve null para envíos inexistentes", async () => {
       expect(await repos.envios.buscarPorId("00000000-0000-4000-8000-0000000fffff")).toBeNull();
       expect(await repos.envios.existeNumeroGuia(999_999_999_999)).toBe(false);
@@ -209,12 +260,20 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(await repos.ciudades.buscarPorId(nueva.id)).toBeNull();
     });
 
-    it("lee y actualiza rutas con sus ciudades", async () => {
+    it("lee, crea y actualiza rutas con sus ciudades (sin tarifa)", async () => {
       const r = (await repos.rutas.buscarPorId(11))!;
       expect([r.origen.nombre, r.destino.nombre]).toEqual(["Ibarra", "Quito"]);
-      const act = await repos.rutas.actualizar(11, { tarifaBase: 6.5 });
-      expect(act).toMatchObject({ tarifaBase: 6.5, tiempoEstimadoMin: r.tiempoEstimadoMin, activa: true });
+      expect(r).not.toHaveProperty("tarifaBase");
+      const act = await repos.rutas.actualizar(11, { tiempoEstimadoMin: 175 });
+      expect(act).toMatchObject({ tiempoEstimadoMin: 175, activa: true });
+      await repos.rutas.actualizar(11, { tiempoEstimadoMin: r.tiempoEstimadoMin });
       expect(await repos.rutas.existe(1, 4)).toBe(true);
+
+      const ciudad = await repos.ciudades.crear("San Pablo");
+      const nueva = await repos.rutas.crear({ origenId: 3, destinoId: ciudad.id, tiempoEstimadoMin: 25 });
+      expect(nueva).toMatchObject({ origen: { id: 3 }, destino: { id: ciudad.id, nombre: "San Pablo" }, tiempoEstimadoMin: 25, activa: true });
+      expect(nueva).not.toHaveProperty("tarifaBase");
+      expect(await repos.rutas.existe(3, ciudad.id)).toBe(true);
     });
   });
 }

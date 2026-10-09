@@ -31,6 +31,14 @@ describe("Envio", () => {
     expect(e.ultimaGestionEntrega).toBeNull();
   });
 
+  it("guarda la zona de entrega (URBANA por defecto) y conserva el costo de los ítems cotizados", () => {
+    expect(crear().zona).toBe("URBANA");
+    const rural = crear({ zona: "RURAL" });
+    expect(rural.zona).toBe("RURAL");
+    expect(rural.toSnapshot()).toMatchObject({ zona: "RURAL", costo: 157.5 });
+    expect(Envio.reconstruir(rural.toSnapshot()).zona).toBe("RURAL");
+  });
+
   it.each([
     [{ remitente: { nombre: "", telefono: "0991234567" } }, /nombre del remitente/],
     [{ remitente: { nombre: "Ana", telefono: "abc" } }, /teléfono del remitente/],
@@ -149,7 +157,7 @@ describe("Ruta", () => {
   });
 
   it("una ruta es operativa solo si ella y sus dos ciudades están activas", () => {
-    const base = { id: 1, origen: ib, destino: qu, tarifaBase: 6, tiempoEstimadoMin: 180, activa: true };
+    const base = { id: 1, origen: ib, destino: qu, tiempoEstimadoMin: 180, activa: true };
     expect(esOperativa(base)).toBe(true);
     expect(esOperativa({ ...base, activa: false })).toBe(false);
     expect(esOperativa({ ...base, destino: { ...qu, activa: false } })).toBe(false);
@@ -162,9 +170,9 @@ describe("Ruta", () => {
     expect(() => normalizarNombreCiudad("a".repeat(61))).toThrow(/entre 2 y 60/);
   });
 
-  it("valida tarifa y tiempo", () => {
-    expect(() => validarDatosRuta({ tarifaBase: 0 })).toThrow(/tarifa/);
+  it("valida el tiempo estimado (la ruta ya no tiene tarifa)", () => {
     expect(() => validarDatosRuta({ tiempoEstimadoMin: 1.5 })).toThrow(/tiempo/);
-    expect(() => validarDatosRuta({ tarifaBase: 3, tiempoEstimadoMin: 30 })).not.toThrow();
+    expect(() => validarDatosRuta({ tiempoEstimadoMin: 0 })).toThrow(/tiempo/);
+    expect(() => validarDatosRuta({ tiempoEstimadoMin: 30 })).not.toThrow();
   });
 });

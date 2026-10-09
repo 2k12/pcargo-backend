@@ -20,6 +20,16 @@ export const ESPACIOS = {
   seguimiento: "seguimiento:",
 } as const;
 
+/**
+ * Versión de la forma de los datos del catálogo (tipos de carga, rutas). Va dentro de la clave para que, al
+ * desplegar un cambio de contrato, la API nunca lea entradas con la forma vieja que queden en un Redis
+ * compartido (p. ej. tipos con `factor` o rutas con `tarifaBase` de v7). Invalidar `catalogo:` las borra todas.
+ */
+export const VERSION_CATALOGO = "v8";
+
+/** Clave dentro del espacio del catálogo: `catalogo:v8:<nombre>`. */
+export const claveCatalogo = (nombre: string): string => `${ESPACIOS.catalogo}${VERSION_CATALOGO}:${nombre}`;
+
 /** TTL en segundos: acotan cuánto puede verse un dato viejo si una invalidación falla. */
 export const TTL = { catalogo: 300, tiposCarga: 3600, dashboard: 60, seguimiento: 60 } as const;
 
@@ -70,10 +80,10 @@ export class RutaRepositoryEnCache implements RutaRepository {
   ) {}
 
   private async leer<T>(clave: string, cargar: () => Promise<T>): Promise<T> {
-    const guardado = await this.cache.obtener<T>(ESPACIOS.catalogo + clave);
+    const guardado = await this.cache.obtener<T>(claveCatalogo(clave));
     if (guardado !== undefined) return guardado;
     const valor = await cargar();
-    await this.cache.guardar(ESPACIOS.catalogo + clave, valor, this.ttlSeg);
+    await this.cache.guardar(claveCatalogo(clave), valor, this.ttlSeg);
     return valor;
   }
 

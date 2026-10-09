@@ -1,15 +1,31 @@
 import { DomainError } from "../shared/DomainError.js";
 
-export const TIPOS_CARGA = ["SOBRE", "PAQUETE", "CARTON", "VALIJA"] as const;
+export const TIPOS_CARGA = [
+  "SOBRE",
+  "PAQUETE",
+  "CARTON",
+  "VALIJA",
+  "TELA",
+  "PLUMON_PEQUENO",
+  "PLUMON_GRANDE",
+] as const;
 export type TipoCargaCodigo = (typeof TIPOS_CARGA)[number];
+
+/** Precio por volumen: con MÁS de `minimoExclusivo` unidades del tipo en el envío, todas cuestan `precio`. */
+export interface Mayoreo {
+  minimoExclusivo: number;
+  precio: number;
+}
 
 export interface TipoCarga {
   codigo: TipoCargaCodigo;
   nombre: string;
-  /** Multiplicador sobre la tarifa base de la ruta. */
-  factor: number;
-  /** Peso cubierto por la tarifa antes de aplicar recargo. */
-  pesoIncluidoKg: number;
+  /** Precio por unidad (USD) en zona urbana. */
+  precio: number;
+  /** Precio por unidad en zona rural; null = el mismo que en zona urbana. */
+  precioRural: number | null;
+  /** Precio por volumen (no depende de la zona); null = no aplica. */
+  mayoreo: Mayoreo | null;
   pesoMaxKg: number;
 }
 

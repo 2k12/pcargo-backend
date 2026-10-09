@@ -28,6 +28,7 @@ export interface EnvioDTO {
   items: ItemEnvio[];
   totalPiezas: number;
   pesoTotalKg: number;
+  zona: string;
   descripcion: string | null;
   costo: number;
   formaPago: string;
@@ -59,6 +60,7 @@ export function toEnvioDTO(envio: Envio, ruta: Ruta | undefined, conHistorial = 
     items: s.items,
     totalPiezas: envio.totalPiezas,
     pesoTotalKg: envio.pesoTotalKg,
+    zona: s.zona,
     descripcion: s.descripcion,
     costo: s.costo,
     formaPago: s.formaPago,

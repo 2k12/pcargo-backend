@@ -36,6 +36,7 @@ import { CrearEnvio } from "../application/use-cases/envios/CrearEnvio.js";
 import { ActualizarRuta, CrearRuta, ListarRutas } from "../application/use-cases/rutas/Rutas.js";
 import { MemoryCache, MemoryLimitadorTasa, SinCache } from "./cache/memoria.js";
 import {
+  claveCatalogo,
   claveGuia,
   conCache,
   ESPACIOS,
@@ -95,26 +96,27 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache()) {
     login: new Login(a.usuarios, a.hasher, a.tokens),
     perfil: new ObtenerPerfil(a.usuarios),
     listarCiudades: conCache(new ListarCiudades(a.ciudades), cache, {
-      clave: (f) => `${ESPACIOS.catalogo}ciudades:${enCatalogo(f?.activa)}`,
+      clave: (f) => claveCatalogo(`ciudades:${enCatalogo(f?.activa)}`),
       ttlSeg: TTL.catalogo,
     }),
     crearCiudad: invalidaTras(new CrearCiudad(a.ciudades), cache, trasCambioCatalogo),
     actualizarCiudad: invalidaTras(new ActualizarCiudad(a.ciudades), cache, trasCambioCatalogo),
     eliminarCiudad: invalidaTras(new EliminarCiudad(a.ciudades, rutas), cache, trasCambioCatalogo),
     listarTiposCarga: conCache(new ListarTiposCarga(a.tiposCarga), cache, {
-      clave: () => `${ESPACIOS.catalogo}tipos-carga`,
+      clave: () => claveCatalogo("tipos-carga"),
       ttlSeg: TTL.tiposCarga,
     }),
     catalogoPublico: conCache(new ObtenerCatalogoPublico(a.ciudades, a.tiposCarga, rutas), cache, {
-      clave: () => `${ESPACIOS.catalogo}publico`,
+      clave: () => claveCatalogo("publico"),
       ttlSeg: TTL.catalogo,
     }),
     listarRutas: conCache(new ListarRutas(rutas), cache, {
-      clave: (f) => `${ESPACIOS.catalogo}rutas:${enCatalogo(f?.activa)}`,
+      clave: (f) => claveCatalogo(`rutas:${enCatalogo(f?.activa)}`),
       ttlSeg: TTL.catalogo,
     }),
     crearRuta: invalidaTras(new CrearRuta(rutas, a.ciudades), cache, trasCambioCatalogo),
     actualizarRuta: invalidaTras(new ActualizarRuta(rutas), cache, trasCambioCatalogo),
+    // Las cotizaciones no se cachean: se calculan con el catálogo de tipos vigente en cada solicitud.
     cotizar,
     crearEnvio: invalidaTras(new CrearEnvio(a.envios, cotizar, a.ids, a.clock, a.clientes), cache, [ESPACIOS.dashboard]),
     // Los nombres de clientes aparecen en el resumen: sus escrituras invalidan el dashboard.

@@ -32,7 +32,10 @@ ciudades ─< rutas >─ ciudades         tipos_carga (SOBRE, PAQUETE, CARTON, V
 ```
 
 - **Ítems**: un envío lleva varias líneas (p. ej. 5 paquetes + 20 cartones); `peso` es por unidad.
-- **Tarifa por pieza**: `tarifa_base(ruta) × factor(tipo) + max(0, peso − peso_incluido) × 0.50 USD`; subtotal = pieza × cantidad.
+- **Precio por unidad según el tipo** (v8; la ruta no influye, sin recargo por peso): sobre, paquete, cartón, valija y
+  plumón pequeño 3.00; plumón grande 4.00; rollo de tela 1.25 (zona urbana) / 1.50 (zona rural), y si el envío suma
+  más de 50 rollos, todos a 1.00 sin importar la zona. `zona` (`URBANA` | `RURAL`) se guarda en el envío.
+  Subtotal = precio × cantidad. El peso por unidad solo se valida contra el máximo del tipo.
 - **Forma de pago**: `PAGADO`, `AL_COBRO`, `CONTRATO`, `SEGURO`.
 - **Estados**: `REGISTRADO → EN_TRANSITO → EN_REPARTO → ENTREGADO | NO_ENTREGADO | NOVEDAD`, `REGISTRADO → CANCELADO`;
   `NO_ENTREGADO → EN_REPARTO` (reintento); `NOVEDAD` se resuelve a reparto/entregado/no entregado. NO_ENTREGADO y NOVEDAD exigen motivo.
