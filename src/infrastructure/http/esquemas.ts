@@ -7,6 +7,18 @@ import { FORMAS_PAGO } from "../../domain/envio/FormaPago.js";
 import { MAX_CANTIDAD, MAX_ITEMS } from "../../domain/tarifa/calcularTarifa.js";
 import { ZONAS } from "../../domain/tarifa/Zona.js";
 import { NOMBRE_USUARIO } from "../../domain/usuario/Usuario.js";
+import {
+  ALCANCES,
+  CANALES,
+  EVENTOS_WEBHOOK,
+  MAX_IPS_PERMITIDAS,
+  MAX_URL_WEBHOOK,
+  MODOS_KEY,
+  NOMBRE_INTEGRACION,
+  NOMBRE_KEY,
+} from "../../domain/integracion/Integracion.js";
+import { ESTADOS_ENTREGA } from "../../domain/integracion/Webhook.js";
+import { esIpOCidrValido } from "../security/redes.js";
 
 // Validación de forma (tipos/obligatorios). Las reglas de negocio viven en el dominio.
 
@@ -79,6 +91,8 @@ export const filtroEnviosSchema = z.object({
   rutaId: z.coerce.number().int().positive().optional(),
   formaPago: z.enum(FORMAS_PAGO).optional(),
   clienteId: z.uuid("cliente inválido").optional(),
+  canal: z.enum(CANALES).optional(),
+  integracionId: z.uuid("integración inválida").optional(),
   q: z.string().optional(),
 });
 
@@ -89,6 +103,8 @@ export const paginacionSchema = z.object({
 
 export const filtroResumenSchema = z.object({
   clienteId: z.uuid("cliente inválido").optional(),
+  canal: z.enum(CANALES).optional(),
+  integracionId: z.uuid("integración inválida").optional(),
   desde: z.string().optional(),
   hasta: z.string().optional(),
 });
@@ -133,3 +149,46 @@ export const actualizarCiudadSchema = z
 
 export const idNumerico = z.coerce.number().int().positive();
 export const idUuid = z.uuid("id inválido");
+
+// ── Integraciones (administración, ADMIN) ────────────────────────────────────
+
+const remitenteIntegracionSchema = z.strictObject({
+  nombre: z.string().max(200),
+  telefono: z.string().max(40),
+  direccion: z.string().max(300),
+});
+
+const ipsSchema = z
+  .array(z.string().max(60).refine(esIpOCidrValido, "IP o rango CIDR inválido (IPv4/IPv6)"))
+  .max(MAX_IPS_PERMITIDAS);
+
+const camposIntegracion = {
+  nombre: z.string().max(NOMBRE_INTEGRACION.max * 2),
+  activa: z.boolean().optional(),
+  remitente: remitenteIntegracionSchema,
+  ciudadOrigenId: z.number().int().positive(),
+  formaPagoPorDefecto: z.enum(FORMAS_PAGO).optional(),
+  clienteId: z.uuid("cliente inválido").nullish(),
+  ipsPermitidas: ipsSchema.optional(),
+};
+
+export const crearIntegracionSchema = z.strictObject(camposIntegracion);
+
+export const actualizarIntegracionSchema = z
+  .strictObject(camposIntegracion)
+  .partial()
+  .refine((v) => Object.values(v).some((x) => x !== undefined), "Debe enviar al menos un campo");
+
+export const crearApiKeySchema = z.strictObject({
+  nombre: z.string().max(NOMBRE_KEY.max * 2),
+  modo: z.enum(MODOS_KEY),
+  alcances: z.array(z.enum(ALCANCES)).min(1, "al menos un alcance").max(ALCANCES.length * 2),
+});
+
+export const webhookSchema = z.strictObject({
+  url: z.string().max(MAX_URL_WEBHOOK),
+  eventos: z.array(z.enum(EVENTOS_WEBHOOK)).min(1, "al menos un evento").max(EVENTOS_WEBHOOK.length * 2),
+  activo: z.boolean(),
+});
+
+export const filtroEntregasSchema = z.object({ estado: z.enum(ESTADOS_ENTREGA).optional() });

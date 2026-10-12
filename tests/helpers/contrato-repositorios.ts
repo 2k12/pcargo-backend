@@ -7,6 +7,14 @@ import type {
   TipoCargaRepository,
   UsuarioRepository,
 } from "../../src/application/ports/repositories.js";
+import type {
+  EntregaWebhookRepository,
+  IdempotenciaRepository,
+  IntegracionRepository,
+  SolicitudApiRepository,
+} from "../../src/application/ports/integraciones.js";
+import type { Integracion } from "../../src/domain/integracion/Integracion.js";
+import type { EntregaWebhook } from "../../src/domain/integracion/Webhook.js";
 import { Envio } from "../../src/domain/envio/Envio.js";
 import { TIPOS_CARGA_SEED, USUARIOS_SEED } from "../../src/infrastructure/persistence/seed-data.js";
 import { ADMIN, OPERADOR, solicitudEnvio } from "./fakes.js";
@@ -19,7 +27,48 @@ export interface FabricaRepos {
   tiposCarga: TipoCargaRepository;
   /** Con los usuarios semilla en su estado original (nombre, correo y contraseña). */
   usuarios: UsuarioRepository;
+  integraciones: IntegracionRepository;
+  entregasWebhook: EntregaWebhookRepository;
+  solicitudesApi: SolicitudApiRepository;
+  idempotencia: IdempotenciaRepository;
 }
+
+export const ID_INTEGRACION = "00000000-0000-4000-e000-000000000001";
+export const ID_INTEGRACION_2 = "00000000-0000-4000-e000-000000000002";
+
+export const integracionDePrueba = (sobre: Partial<Integracion> = {}): Integracion => ({
+  id: ID_INTEGRACION,
+  nombre: "Tienda Andina",
+  activa: true,
+  remitente: { nombre: "Tienda Andina S.A.", telefono: "062600100", direccion: "Bolívar 1-23, Ibarra" },
+  ciudadOrigenId: 1,
+  formaPagoPorDefecto: "CONTRATO",
+  clienteId: null,
+  ipsPermitidas: [],
+  webhook: null,
+  creadaEn: new Date(Date.UTC(2026, 9, 1)),
+  keys: [],
+  ...sobre,
+});
+
+const entregaDePrueba = (n: number, sobre: Partial<EntregaWebhook> = {}): EntregaWebhook => ({
+  id: `00000000-0000-4000-f000-${String(n).padStart(12, "0")}`,
+  integracionId: ID_INTEGRACION,
+  mensajeId: `msg_${n}`,
+  evento: "envio.estado_actualizado",
+  envioId: null,
+  numeroGuia: null,
+  cuerpo: `{"n":${n}}`,
+  prueba: false,
+  estado: "PENDIENTE",
+  intentos: 0,
+  ultimoStatus: null,
+  ultimoError: null,
+  proximoIntentoEn: new Date(Date.UTC(2026, 9, 1, 12, n)),
+  creadoEn: new Date(Date.UTC(2026, 9, 1, 12, n)),
+  entregadoEn: null,
+  ...sobre,
+});
 
 /**
  * Suite de contrato: cualquier adaptador de persistencia debe pasarla.
@@ -354,6 +403,241 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(nueva).toMatchObject({ origen: { id: 3 }, destino: { id: ciudad.id, nombre: "San Pablo" }, tiempoEstimadoMin: 25, activa: true });
       expect(nueva).not.toHaveProperty("tarifaBase");
       expect(await repos.rutas.existe(3, ciudad.id)).toBe(true);
+    });
+
+    // ── Integraciones con empresas (v10) ──
+
+    it("integraciones: alta, nombre único sin distinguir mayúsculas, webhook y keys (prefijo, revocación, uso)", async () => {
+      const i = integracionDePrueba({ ipsPermitidas: ["203.0.113.0/24", "2001:db8::1"] });
+      await repos.integraciones.guardar(i);
+      expect(await repos.integraciones.existeNombre("TIENDA ANDINA")).toBe(true);
+      expect(await repos.integraciones.existeNombre("tienda andina", ID_INTEGRACION)).toBe(false);
+      await expect(
+        repos.integraciones.guardar(integracionDePrueba({ id: ID_INTEGRACION_2, nombre: "tienda ANDINA" })),
+      ).rejects.toMatchObject({ code: "CONFLICTO" });
+
+      const webhook = {
+        url: "https://tienda.example/hooks",
+        eventos: ["envio.creado" as const],
+        activo: true,
+        secretoCifrado: "v1:abc",
+        secretoPrefijo: "whsec_abcd",
+      };
+      await repos.integraciones.guardar({ ...i, nombre: "Tienda Andina Cía.", webhook });
+      const leida = (await repos.integraciones.buscarPorId(ID_INTEGRACION))!;
+      expect(leida).toMatchObject({
+        nombre: "Tienda Andina Cía.",
+        remitente: i.remitente,
+        ciudadOrigenId: 1,
+        formaPagoPorDefecto: "CONTRATO",
+        ipsPermitidas: ["203.0.113.0/24", "2001:db8::1"],
+        webhook,
+        keys: [],
+      });
+
+      const key = {
+        id: "00000000-0000-4000-e100-000000000001",
+        integracionId: ID_INTEGRACION,
+        nombre: "Producción",
+        modo: "live" as const,
+        prefijo: "pc_live_Ab3dE6gH",
+        hash: "a".repeat(64),
+        alcances: ["envios:crear" as const, "cotizar" as const],
+        creadaEn: new Date(Date.UTC(2026, 9, 2)),
+        ultimoUsoEn: null,
+        revocadaEn: null,
+      };
+      await repos.integraciones.crearKey(key);
+      // guardar los datos de la integración no toca sus keys
+      await repos.integraciones.guardar({ ...leida, activa: false, keys: [] });
+      const porPrefijo = (await repos.integraciones.buscarPorPrefijoKey("pc_live_Ab3dE6gH"))!;
+      expect(porPrefijo.key).toEqual(key);
+      expect(porPrefijo.integracion).toMatchObject({ id: ID_INTEGRACION, activa: false, keys: [key] });
+      expect(await repos.integraciones.buscarPorPrefijoKey("pc_live_XXXXXXXX")).toBeNull();
+
+      const uso = new Date(Date.UTC(2026, 9, 3));
+      await repos.integraciones.registrarUsoKey(key.id, uso);
+      const revocada = new Date(Date.UTC(2026, 9, 4));
+      expect(await repos.integraciones.revocarKey(ID_INTEGRACION, key.id, revocada)).toBe(true);
+      expect(await repos.integraciones.revocarKey(ID_INTEGRACION, key.id, new Date())).toBe(true); // conserva la fecha
+      expect(await repos.integraciones.revocarKey(ID_INTEGRACION_2, key.id, new Date())).toBe(false);
+      expect((await repos.integraciones.buscarPorId(ID_INTEGRACION))?.keys[0]).toMatchObject({ ultimoUsoEn: uso, revocadaEn: revocada });
+
+      await repos.integraciones.guardar({ ...leida, webhook: null });
+      expect((await repos.integraciones.buscarPorId(ID_INTEGRACION))?.webhook).toBeNull();
+      expect((await repos.integraciones.listar()).map((x) => x.id)).toEqual([ID_INTEGRACION]);
+      await repos.integraciones.eliminar(ID_INTEGRACION);
+      expect(await repos.integraciones.buscarPorId(ID_INTEGRACION)).toBeNull();
+      expect(await repos.integraciones.buscarPorPrefijoKey("pc_live_Ab3dE6gH")).toBeNull();
+    });
+
+    it("envíos por API: origen con el nombre actual, referencia única por integración, filtros y outbox", async () => {
+      await repos.integraciones.guardar(integracionDePrueba());
+      await repos.integraciones.guardar(integracionDePrueba({ id: ID_INTEGRACION_2, nombre: "Distribuidora Norte" }));
+      const integracion = { id: ID_INTEGRACION, nombre: "Tienda Andina" };
+      const api = nuevoEnvio(20, { integracion, referenciaExterna: "PED-1001" });
+      const panel = nuevoEnvio(21);
+      const webhook = entregaDePrueba(1, { envioId: api.id, numeroGuia: api.numeroGuia, evento: "envio.creado" });
+      await repos.envios.guardar(api, { webhooks: [webhook] });
+      await repos.envios.guardar(panel);
+
+      const leido = (await repos.envios.buscarPorId(api.id))!;
+      expect(leido.origen).toEqual({ canal: "API", integracionId: ID_INTEGRACION, integracion: "Tienda Andina" });
+      expect(leido.referenciaExterna).toBe("PED-1001");
+      expect((await repos.envios.buscarPorId(panel.id))!.origen).toEqual({ canal: "PANEL", integracionId: null, integracion: null });
+      expect((await repos.envios.buscarPorReferencia(ID_INTEGRACION, "PED-1001"))?.id).toBe(api.id);
+      expect(await repos.envios.buscarPorReferencia(ID_INTEGRACION_2, "PED-1001")).toBeNull();
+
+      // la misma referencia en otra integración sí se puede; en la misma, no
+      const otra = nuevoEnvio(22, { integracion: { id: ID_INTEGRACION_2, nombre: "Distribuidora Norte" }, referenciaExterna: "PED-1001" });
+      await repos.envios.guardar(otra);
+      await expect(repos.envios.guardar(nuevoEnvio(23, { integracion, referenciaExterna: "PED-1001" }))).rejects.toMatchObject({
+        code: "CONFLICTO",
+      });
+
+      expect((await repos.envios.listar({ canal: "API" })).map((e) => e.id).sort()).toEqual([api.id, otra.id].sort());
+      expect((await repos.envios.listar({ canal: "PANEL" })).map((e) => e.id)).toEqual([panel.id]);
+      expect((await repos.envios.listar({ integracionId: ID_INTEGRACION })).map((e) => e.id)).toEqual([api.id]);
+      expect((await repos.envios.listarPagina({ q: "ped-10" }, { pagina: 1, porPagina: 10 })).total).toBe(2);
+      expect((await repos.envios.listar({ q: "100%" })).map((e) => e.id)).toEqual([]); // comodines literales
+
+      const est = await repos.envios.estadisticasPorIntegracion();
+      expect(est.get(ID_INTEGRACION)).toEqual({ envios: 1, ultimoEnvio: api.toSnapshot().creadoEn });
+      expect(est.get(ID_INTEGRACION_2)?.envios).toBe(1);
+
+      // el nombre que se muestra es el actual de la integración
+      await repos.integraciones.guardar(integracionDePrueba({ nombre: "Tienda Andina Express" }));
+      expect((await repos.envios.buscarPorId(api.id))!.origen.integracion).toBe("Tienda Andina Express");
+
+      // cambiar el estado conserva origen y referencia, y encola otra entrega
+      leido.cambiarEstado("EN_TRANSITO", { ahora: new Date(Date.UTC(2026, 9, 1, 14)), actor: OPERADOR });
+      await repos.envios.guardar(leido, { webhooks: [entregaDePrueba(2, { envioId: api.id })] });
+      expect((await repos.envios.buscarPorReferencia(ID_INTEGRACION, "PED-1001"))?.estado).toBe("EN_TRANSITO");
+
+      const pendientes = await repos.entregasWebhook.tomarPendientes(
+        new Date(Date.UTC(2026, 9, 2)),
+        10,
+        new Date(Date.UTC(2026, 9, 2, 0, 2)),
+      );
+      expect(pendientes.map((e) => e.mensajeId)).toEqual(["msg_1", "msg_2"]);
+      expect(pendientes[0]).toEqual(webhook);
+    });
+
+    it("webhooks: reserva con bloqueo, actualiza intentos, lista recientes primero y filtra por estado", async () => {
+      await repos.integraciones.guardar(integracionDePrueba());
+      for (const n of [1, 2, 3]) await repos.entregasWebhook.crear(entregaDePrueba(n));
+      await repos.entregasWebhook.crear(entregaDePrueba(4, { proximoIntentoEn: new Date(Date.UTC(2026, 9, 5)) }));
+      await repos.entregasWebhook.crear(entregaDePrueba(5, { prueba: true, proximoIntentoEn: null }));
+
+      const ahora = new Date(Date.UTC(2026, 9, 2));
+      const bloqueo = new Date(ahora.getTime() + 120_000);
+      const primeras = await repos.entregasWebhook.tomarPendientes(ahora, 2, bloqueo);
+      expect(primeras.map((e) => e.mensajeId)).toEqual(["msg_1", "msg_2"]);
+      // las bloqueadas no se vuelven a tomar; las futuras ni las de prueba (sin fecha) tampoco
+      expect((await repos.entregasWebhook.tomarPendientes(ahora, 10, bloqueo)).map((e) => e.mensajeId)).toEqual(["msg_3"]);
+      expect(await repos.entregasWebhook.tomarPendientes(ahora, 10, bloqueo)).toEqual([]);
+      // vencido el bloqueo vuelven a estar disponibles
+      expect((await repos.entregasWebhook.tomarPendientes(bloqueo, 10, new Date(bloqueo.getTime() + 1))).length).toBe(3);
+
+      const entregada = {
+        ...primeras[0]!,
+        estado: "ENTREGADO" as const,
+        intentos: 1,
+        ultimoStatus: 200,
+        proximoIntentoEn: null,
+        entregadoEn: ahora,
+      };
+      await repos.entregasWebhook.actualizar(entregada);
+      const fallida = {
+        ...primeras[1]!,
+        estado: "FALLIDO" as const,
+        intentos: 8,
+        ultimoStatus: 500,
+        ultimoError: "HTTP 500",
+        proximoIntentoEn: null,
+      };
+      await repos.entregasWebhook.actualizar(fallida);
+      expect(await repos.entregasWebhook.buscarPorId(ID_INTEGRACION, entregada.id)).toEqual(entregada);
+      expect(await repos.entregasWebhook.buscarPorId(ID_INTEGRACION_2, entregada.id)).toBeNull();
+
+      const todas = await repos.entregasWebhook.listarPagina(ID_INTEGRACION, {}, { pagina: 1, porPagina: 2 });
+      expect(todas.total).toBe(5);
+      expect(todas.entregas.map((e) => e.mensajeId)).toEqual(["msg_5", "msg_4"]);
+      const fallidas = await repos.entregasWebhook.listarPagina(ID_INTEGRACION, { estado: "FALLIDO" }, { pagina: 1, porPagina: 10 });
+      expect(fallidas.entregas).toEqual([fallida]);
+    });
+
+    it("auditoría de la API: registra, pagina recientes primero y purga por fecha", async () => {
+      await repos.integraciones.guardar(integracionDePrueba());
+      const base = {
+        integracionId: ID_INTEGRACION,
+        metodo: "POST",
+        ruta: "/api/v1/integraciones/envios",
+        status: 201,
+        ip: "203.0.113.7",
+        keyPrefijo: "pc_live_Ab3dE6gH",
+        idempotencyKey: "pedido-1",
+        referenciaExterna: "PED-1",
+        duracionMs: 12,
+      };
+      for (const [n, dia] of [[1, 1], [2, 5], [3, 9]] as const) {
+        await repos.solicitudesApi.registrar({
+          ...base,
+          id: `00000000-0000-4000-e200-00000000000${n}`,
+          fecha: new Date(Date.UTC(2026, 9, dia)),
+          requestId: `00000000-0000-4000-e300-00000000000${n}`,
+        });
+      }
+      await repos.solicitudesApi.registrar({
+        ...base,
+        integracionId: null,
+        keyPrefijo: null,
+        status: 401,
+        id: "00000000-0000-4000-e200-000000000009",
+        fecha: new Date(Date.UTC(2026, 9, 9)),
+        requestId: "00000000-0000-4000-e300-000000000009",
+      });
+      const p = await repos.solicitudesApi.listarPagina(ID_INTEGRACION, { pagina: 1, porPagina: 2 });
+      expect(p.total).toBe(3);
+      expect(p.solicitudes.map((s) => s.requestId)).toEqual([
+        "00000000-0000-4000-e300-000000000003",
+        "00000000-0000-4000-e300-000000000002",
+      ]);
+      expect(p.solicitudes[0]).toMatchObject({ ...base, fecha: new Date(Date.UTC(2026, 9, 9)) });
+      expect(await repos.solicitudesApi.purgarAnteriores(new Date(Date.UTC(2026, 9, 6)))).toBe(2);
+      expect((await repos.solicitudesApi.listarPagina(ID_INTEGRACION, { pagina: 1, porPagina: 10 })).total).toBe(1);
+    });
+
+    it("idempotencia: reserva atómica, replay, conflicto, en proceso, vencida, abandonada, liberar y purgar", async () => {
+      await repos.integraciones.guardar(integracionDePrueba());
+      const clave = { integracionId: ID_INTEGRACION, modo: "live" as const, clave: "pedido-1" };
+      const t0 = new Date(Date.UTC(2026, 9, 1, 12));
+      const lim = (ahora: Date) => ({
+        vigenteDesde: new Date(ahora.getTime() - 24 * 3600_000),
+        abandonadaAntesDe: new Date(ahora.getTime() - 5 * 60_000),
+      });
+      expect(await repos.idempotencia.reservar(clave, "h1", t0, lim(t0))).toEqual({ tipo: "nueva" });
+      expect(await repos.idempotencia.reservar(clave, "h1", t0, lim(t0))).toEqual({ tipo: "en_proceso" });
+      expect(await repos.idempotencia.reservar(clave, "h2", t0, lim(t0))).toEqual({ tipo: "conflicto" });
+      // la misma clave en modo prueba es independiente
+      expect(await repos.idempotencia.reservar({ ...clave, modo: "test" }, "h2", t0, lim(t0))).toEqual({ tipo: "nueva" });
+
+      const cuerpo = JSON.stringify({ b: 1, a: [2, "x"] });
+      await repos.idempotencia.completar(clave, { status: 201, cuerpo }, t0);
+      expect(await repos.idempotencia.reservar(clave, "h1", t0, lim(t0))).toEqual({ tipo: "repetida", respuesta: { status: 201, cuerpo } });
+      expect(await repos.idempotencia.reservar(clave, "h9", t0, lim(t0))).toEqual({ tipo: "conflicto" });
+
+      // a las 24 h vence y se puede reutilizar con otro cuerpo
+      const t1 = new Date(t0.getTime() + 24 * 3600_000 + 1000);
+      expect(await repos.idempotencia.reservar(clave, "h3", t1, lim(t1))).toEqual({ tipo: "nueva" });
+      // una reserva "en proceso" abandonada (> 5 min) se puede tomar
+      const t2 = new Date(t1.getTime() + 6 * 60_000);
+      expect(await repos.idempotencia.reservar(clave, "h3", t2, lim(t2))).toEqual({ tipo: "nueva" });
+      await repos.idempotencia.liberar(clave);
+      expect(await repos.idempotencia.reservar(clave, "h4", t2, lim(t2))).toEqual({ tipo: "nueva" });
+
+      expect(await repos.idempotencia.purgarAnteriores(new Date(t2.getTime() + 1))).toBe(2);
+      expect(await repos.idempotencia.reservar(clave, "h5", t2, lim(t2))).toEqual({ tipo: "nueva" });
     });
   });
 }

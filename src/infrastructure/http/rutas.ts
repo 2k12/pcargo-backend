@@ -14,6 +14,11 @@ import {
   crearClienteSchema,
   crearEnvioSchema,
   crearRutaSchema,
+  actualizarIntegracionSchema,
+  crearApiKeySchema,
+  crearIntegracionSchema,
+  filtroEntregasSchema,
+  webhookSchema,
   filtroEnviosSchema,
   filtroResumenSchema,
   idNumerico,
@@ -171,6 +176,83 @@ export function crearRouter(c: CasosDeUso, opciones: OpcionesRouter = {}): Route
 
   privado.get("/dashboard/resumen", async (req, res) => {
     res.json(await c.resumen.ejecutar(filtroResumenSchema.parse(req.query)));
+  });
+
+  // ── Integraciones con empresas (solo ADMIN; lo exige cada caso de uso) ──
+  privado.get("/integraciones", async (_req, res) => {
+    res.json(await c.listarIntegraciones.ejecutar(actorDe(res)));
+  });
+
+  privado.post("/integraciones", async (req, res) => {
+    res.status(201).json(await c.crearIntegracion.ejecutar(actorDe(res), crearIntegracionSchema.parse(req.body)));
+  });
+
+  privado.get("/integraciones/:id", async (req, res) => {
+    res.json(await c.obtenerIntegracion.ejecutar(actorDe(res), idUuid.parse(req.params.id)));
+  });
+
+  privado.patch("/integraciones/:id", async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    res.json(await c.actualizarIntegracion.ejecutar(actorDe(res), id, actualizarIntegracionSchema.parse(req.body)));
+  });
+
+  privado.delete("/integraciones/:id", async (req, res) => {
+    await c.eliminarIntegracion.ejecutar(actorDe(res), idUuid.parse(req.params.id));
+    res.status(204).end();
+  });
+
+  // La key completa solo viaja en esta respuesta: que nadie (navegador ni proxy) la guarde.
+  privado.post("/integraciones/:id/keys", async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    const r = await c.crearApiKey.ejecutar(actorDe(res), id, crearApiKeySchema.parse(req.body));
+    res.status(201).set("Cache-Control", "no-store").json(r);
+  });
+
+  privado.delete("/integraciones/:id/keys/:keyId", async (req, res) => {
+    await c.revocarApiKey.ejecutar(actorDe(res), idUuid.parse(req.params.id), idUuid.parse(req.params.keyId));
+    res.status(204).end();
+  });
+
+  privado.put("/integraciones/:id/webhook", async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    const r = await c.configurarWebhook.ejecutar(actorDe(res), id, webhookSchema.parse(req.body));
+    res.set("Cache-Control", "no-store").json(r);
+  });
+
+  privado.post("/integraciones/:id/webhook/rotar-secreto", async (req, res) => {
+    const r = await c.rotarSecretoWebhook.ejecutar(actorDe(res), idUuid.parse(req.params.id));
+    res.set("Cache-Control", "no-store").json(r);
+  });
+
+  privado.delete("/integraciones/:id/webhook", async (req, res) => {
+    await c.eliminarWebhook.ejecutar(actorDe(res), idUuid.parse(req.params.id));
+    res.status(204).end();
+  });
+
+  privado.post("/integraciones/:id/webhook/prueba", async (req, res) => {
+    res.json(await c.enviarWebhookPrueba.ejecutar(actorDe(res), idUuid.parse(req.params.id)));
+  });
+
+  privado.get("/integraciones/:id/webhook/entregas", async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    res.json(
+      await c.listarEntregasWebhook.ejecutar(
+        actorDe(res),
+        id,
+        filtroEntregasSchema.parse(req.query),
+        paginacionSchema.parse(req.query),
+      ),
+    );
+  });
+
+  privado.post("/integraciones/:id/webhook/entregas/:entregaId/reintentar", async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    res.json(await c.reintentarEntregaWebhook.ejecutar(actorDe(res), id, idUuid.parse(req.params.entregaId)));
+  });
+
+  privado.get("/integraciones/:id/solicitudes", async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    res.json(await c.listarSolicitudesApi.ejecutar(actorDe(res), id, paginacionSchema.parse(req.query)));
   });
 
   return Router().use(publico).use(privado);

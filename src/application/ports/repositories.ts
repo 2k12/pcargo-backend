@@ -3,6 +3,8 @@ import type { Cliente, DatosCliente } from "../../domain/cliente/Cliente.js";
 import type { Envio } from "../../domain/envio/Envio.js";
 import type { EstadoEnvio } from "../../domain/envio/EstadoEnvio.js";
 import type { FormaPago } from "../../domain/envio/FormaPago.js";
+import type { Canal } from "../../domain/integracion/Integracion.js";
+import type { EntregaWebhook } from "../../domain/integracion/Webhook.js";
 import type { Ciudad, Ruta } from "../../domain/ruta/Ruta.js";
 import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../domain/usuario/Usuario.js";
 
@@ -70,8 +72,11 @@ export interface FiltroEnvios {
   clienteId?: string;
   /** Número de guía exacto (se combina con `q` mediante OR). */
   numeroGuia?: number;
-  /** Busca en remitente y destinatario (sin distinguir mayúsculas). */
+  /** Busca en remitente, destinatario y referencia externa (sin distinguir mayúsculas). */
   q?: string;
+  /** PANEL (sin integración) o API. */
+  canal?: Canal;
+  integracionId?: string;
 }
 
 export interface Paginacion {
@@ -80,8 +85,28 @@ export interface Paginacion {
   porPagina: number;
 }
 
+export interface OpcionesGuardarEnvio {
+  /**
+   * Webhooks a encolar (outbox) en la MISMA transacción que el cambio del envío: si el cambio no se guarda,
+   * tampoco se encolan; si se guarda, un reinicio no los pierde.
+   */
+  webhooks?: EntregaWebhook[];
+}
+
+export interface EstadisticaIntegracion {
+  envios: number;
+  ultimoEnvio: Date | null;
+}
+
 export interface EnvioRepository {
-  guardar(envio: Envio): Promise<void>;
+  /**
+   * Referencia externa repetida en la misma integración → DomainError("CONFLICTO").
+   */
+  guardar(envio: Envio, opciones?: OpcionesGuardarEnvio): Promise<void>;
+  /** Envío de una integración por su número de pedido. */
+  buscarPorReferencia(integracionId: string, referenciaExterna: string): Promise<Envio | null>;
+  /** Cantidad de envíos y fecha del último por integración (solo las que tienen envíos). */
+  estadisticasPorIntegracion(): Promise<Map<string, EstadisticaIntegracion>>;
   buscarPorId(id: string): Promise<Envio | null>;
   buscarPorNumeroGuia(numeroGuia: number): Promise<Envio | null>;
   existeNumeroGuia(numeroGuia: number): Promise<boolean>;

@@ -1,11 +1,20 @@
 import "dotenv/config";
 import { join, resolve } from "node:path";
 import { z } from "zod";
+import { leerClaveCifrado } from "../security/cifrado.js";
 
 /** <raíz del backend>/storage, igual desde src/ (tsx) y dist/ (build). */
 export const CARPETA_STORAGE_DEFECTO = join(import.meta.dirname, "..", "..", "..", "storage");
 
 const opcionalNoVacio = z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.string().optional());
+
+const booleano = (porDefecto: boolean) =>
+  opcionalNoVacio.pipe(
+    z
+      .enum(["true", "false", "1", "0"])
+      .optional()
+      .transform((v) => (v === undefined ? porDefecto : v === "true" || v === "1")),
+  );
 
 const esquema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
@@ -29,6 +38,16 @@ const esquema = z.object({
   R2_ACCESS_KEY_ID: opcionalNoVacio,
   R2_SECRET_ACCESS_KEY: opcionalNoVacio,
   R2_BUCKET: opcionalNoVacio,
+  /** URL pública del frontend: arma `seguimientoUrl` de la API para empresas (`<PUBLIC_URL>/seguimiento/<guía>`). */
+  PUBLIC_URL: opcionalNoVacio.pipe(z.url("PUBLIC_URL debe ser una URL").default("http://localhost:5173")),
+  /** 32 bytes (base64 o hex) para cifrar los secretos de los webhooks. Sin ella no se pueden configurar webhooks. */
+  INTEGRACIONES_CLAVE_CIFRADO: opcionalNoVacio,
+  /** Solo desarrollo: acepta webhooks http:// y desactiva el bloqueo de destinos no públicos (anti-SSRF). */
+  WEBHOOKS_PERMITIR_HTTP: booleano(false),
+  /** Despachador de webhooks en este proceso (desactívelo si otra instancia se encarga). */
+  WEBHOOKS_DESPACHADOR: booleano(true),
+  /** Cada cuántos segundos revisa la cola de webhooks. */
+  WEBHOOKS_INTERVALO_SEG: z.coerce.number().int().min(1).max(3600).default(15),
 });
 
 type StorageDriver = "local" | "r2" | "memory";
@@ -56,6 +75,13 @@ export function cargarConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const faltan = VARIABLES_R2.filter((v) => !config[v]);
     if (faltan.length) {
       throw new Error(`Configuración inválida: STORAGE_DRIVER=r2 requiere ${faltan.join(", ")}`);
+    }
+  }
+  if (config.INTEGRACIONES_CLAVE_CIFRADO) {
+    try {
+      leerClaveCifrado(config.INTEGRACIONES_CLAVE_CIFRADO);
+    } catch (e) {
+      throw new Error(`Configuración inválida: ${(e as Error).message}`);
     }
   }
   return {

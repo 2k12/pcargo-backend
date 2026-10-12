@@ -3,7 +3,9 @@ import type {
   CambiosRuta,
   CiudadRepository,
   EnvioRepository,
+  EstadisticaIntegracion,
   FiltroEnvios,
+  OpcionesGuardarEnvio,
   Paginacion,
   NuevaRuta,
   RutaRepository,
@@ -12,6 +14,7 @@ import type {
 } from "../../../application/ports/repositories.js";
 import type { TipoCarga, TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
 import { Envio, type EnvioProps } from "../../../domain/envio/Envio.js";
+import type { EntregaWebhook } from "../../../domain/integracion/Webhook.js";
 import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
@@ -175,21 +178,71 @@ export class InMemoryRutaRepository implements RutaRepository {
   }
 }
 
+export interface OpcionesEnvioMemoria {
+  /** Cola de webhooks (outbox) donde se encolan las entregas al guardar. */
+  outbox?: { encolar(entregas: EntregaWebhook[]): void };
+  /** Nombre actual de una integración (para `Envio.origen.integracion`). */
+  nombreIntegracion?: (id: string) => string | null;
+}
+
 export class InMemoryEnvioRepository implements EnvioRepository {
   private readonly datos = new Map<string, EnvioProps>();
 
-  async guardar(envio: Envio): Promise<void> {
-    this.datos.set(envio.id, envio.toSnapshot());
+  constructor(private readonly opciones: OpcionesEnvioMemoria = {}) {}
+
+  async guardar(envio: Envio, opciones: OpcionesGuardarEnvio = {}): Promise<void> {
+    const s = envio.toSnapshot();
+    if (!this.datos.has(s.id)) {
+      const repetida =
+        s.integracionId &&
+        [...this.datos.values()].some((x) => x.integracionId === s.integracionId && x.referenciaExterna === s.referenciaExterna);
+      if (repetida) throw new DomainError("CONFLICTO", `Ya existe un envío con la referencia ${s.referenciaExterna}`);
+      if ([...this.datos.values()].some((x) => x.numeroGuia === s.numeroGuia)) {
+        throw new DomainError("CONFLICTO", `La guía ${s.numeroGuia} ya está registrada`);
+      }
+    } else {
+      // Como en Postgres: el origen y la referencia no cambian después de crear el envío.
+      const previo = this.datos.get(s.id)!;
+      s.integracionId = previo.integracionId ?? null;
+      s.referenciaExterna = previo.referenciaExterna ?? null;
+    }
+    if (opciones.webhooks?.length) this.opciones.outbox?.encolar(opciones.webhooks);
+    this.datos.set(envio.id, { ...s, integracionNombre: null });
+  }
+
+  /** Reconstruye con el nombre ACTUAL de la integración (como el JOIN de Postgres). */
+  private leer(p: EnvioProps): Envio {
+    const nombre = p.integracionId ? (this.opciones.nombreIntegracion?.(p.integracionId) ?? null) : null;
+    return Envio.reconstruir({ ...p, integracionNombre: nombre });
   }
 
   async buscarPorId(id: string): Promise<Envio | null> {
     const p = this.datos.get(id);
-    return p ? Envio.reconstruir(p) : null;
+    return p ? this.leer(p) : null;
   }
 
   async buscarPorNumeroGuia(numeroGuia: number): Promise<Envio | null> {
     const p = [...this.datos.values()].find((x) => x.numeroGuia === numeroGuia);
-    return p ? Envio.reconstruir(p) : null;
+    return p ? this.leer(p) : null;
+  }
+
+  async buscarPorReferencia(integracionId: string, referenciaExterna: string): Promise<Envio | null> {
+    const p = [...this.datos.values()].find(
+      (x) => x.integracionId === integracionId && x.referenciaExterna === referenciaExterna,
+    );
+    return p ? this.leer(p) : null;
+  }
+
+  async estadisticasPorIntegracion(): Promise<Map<string, EstadisticaIntegracion>> {
+    const mapa = new Map<string, EstadisticaIntegracion>();
+    for (const p of this.datos.values()) {
+      if (!p.integracionId) continue;
+      const e = mapa.get(p.integracionId) ?? { envios: 0, ultimoEnvio: null };
+      e.envios++;
+      if (!e.ultimoEnvio || p.creadoEn > e.ultimoEnvio) e.ultimoEnvio = p.creadoEn;
+      mapa.set(p.integracionId, e);
+    }
+    return mapa;
   }
 
   async existeNumeroGuia(numeroGuia: number): Promise<boolean> {
@@ -201,13 +254,13 @@ export class InMemoryEnvioRepository implements EnvioRepository {
   }
 
   async listar(filtro: FiltroEnvios = {}): Promise<Envio[]> {
-    return this.filtrar(filtro).map((p) => Envio.reconstruir(p));
+    return this.filtrar(filtro).map((p) => this.leer(p));
   }
 
   async listarPagina(filtro: FiltroEnvios, { pagina, porPagina }: Paginacion): Promise<{ envios: Envio[]; total: number }> {
     const todos = this.filtrar(filtro);
     const desde = (pagina - 1) * porPagina;
-    return { envios: todos.slice(desde, desde + porPagina).map((p) => Envio.reconstruir(p)), total: todos.length };
+    return { envios: todos.slice(desde, desde + porPagina).map((p) => this.leer(p)), total: todos.length };
   }
 
   private filtrar(filtro: FiltroEnvios): EnvioProps[] {
@@ -217,11 +270,13 @@ export class InMemoryEnvioRepository implements EnvioRepository {
       .filter((p) => !filtro.rutaId || p.rutaId === filtro.rutaId)
       .filter((p) => !filtro.formaPago || p.formaPago === filtro.formaPago)
       .filter((p) => !filtro.clienteId || p.clienteId === filtro.clienteId)
+      .filter((p) => !filtro.canal || (filtro.canal === "API") === Boolean(p.integracionId))
+      .filter((p) => !filtro.integracionId || p.integracionId === filtro.integracionId)
       .filter(
         (p) =>
           !q ||
           p.numeroGuia === filtro.numeroGuia ||
-          [p.remitente.nombre, p.destinatario.nombre].some((v) => v.toLowerCase().includes(q)),
+          [p.remitente.nombre, p.destinatario.nombre, p.referenciaExterna ?? ""].some((v) => v.toLowerCase().includes(q)),
       )
       .sort((a, b) => b.creadoEn.getTime() - a.creadoEn.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
   }

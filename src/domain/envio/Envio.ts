@@ -1,4 +1,6 @@
 import type { TipoCargaCodigo } from "../carga/TipoCarga.js";
+import { validarReferenciaExterna } from "../integracion/EnvioExterno.js";
+import type { OrigenEnvio } from "../integracion/Integracion.js";
 import { DomainError, redondear2 } from "../shared/DomainError.js";
 import { ZONA_POR_DEFECTO, type Zona } from "../tarifa/Zona.js";
 import type { Actor } from "../usuario/Usuario.js";
@@ -76,6 +78,12 @@ export interface EnvioProps {
   historial: EventoHistorial[];
   /** Foto de la guía firmada y nombre de quien recibió (solo en ENTREGADO). */
   evidencia?: EvidenciaEntrega | null;
+  /** Integración (empresa) que ingresó el envío por la API; null/undefined = panel. */
+  integracionId?: string | null;
+  /** Nombre actual de la integración (lo resuelve el repositorio al leer). */
+  integracionNombre?: string | null;
+  /** Número de pedido de la empresa (solo canal API; único por integración). */
+  referenciaExterna?: string | null;
 }
 
 export interface NuevoEnvio {
@@ -89,6 +97,9 @@ export interface NuevoEnvio {
   clienteId?: string | null;
   /** Por defecto URBANA. */
   zona?: Zona;
+  /** Envío ingresado por la API de una empresa: exige `referenciaExterna`. */
+  integracion?: { id: string; nombre: string } | null;
+  referenciaExterna?: string | null;
 }
 
 const TELEFONO = /^\+?[0-9 ]{7,15}$/;
@@ -104,7 +115,14 @@ function validarContacto(c: Contacto, rol: string): void {
 export class Envio {
   private constructor(private props: EnvioProps) {}
 
-  static crear(datos: NuevoEnvio, ctx: { id: string; numeroGuia: number; ahora: Date; actor: Actor }): Envio {
+  /**
+   * `actor` null = sin operador (envío ingresado por la API de una empresa). `notaRegistro` es la nota del evento
+   * REGISTRADO (p. ej. "Ingresado por API: Tienda X").
+   */
+  static crear(
+    datos: NuevoEnvio,
+    ctx: { id: string; numeroGuia: number; ahora: Date; actor: Actor | null; notaRegistro?: string | null },
+  ): Envio {
     validarContacto(datos.remitente, "remitente");
     validarContacto(datos.destinatario, "destinatario");
     if (!datos.destinatario.direccion?.trim()) {
@@ -115,7 +133,12 @@ export class Envio {
       throw new DomainError("VALIDACION", `La dirección del remitente admite hasta ${MAX_DIRECCION_REMITENTE} caracteres`);
     }
     if (datos.items.length === 0) throw new DomainError("VALIDACION", "El envío debe tener al menos un ítem");
-    const usuario = { id: ctx.actor.id, nombre: ctx.actor.nombre };
+    const integracion = datos.integracion ?? null;
+    const referenciaExterna = integracion ? validarReferenciaExterna(datos.referenciaExterna) : null;
+    if (!integracion && datos.referenciaExterna) {
+      throw new DomainError("VALIDACION", "La referencia externa solo aplica a envíos ingresados por API");
+    }
+    const usuario = ctx.actor ? { id: ctx.actor.id, nombre: ctx.actor.nombre } : null;
     return new Envio({
       id: ctx.id,
       numeroGuia: ctx.numeroGuia,
@@ -137,11 +160,14 @@ export class Envio {
       descripcion: datos.descripcion?.trim() || null,
       costo: redondear2(datos.items.reduce((s, i) => s + i.subtotal, 0)),
       estado: "REGISTRADO",
-      creadoPor: ctx.actor.id,
+      creadoPor: ctx.actor?.id ?? null,
       creadoEn: ctx.ahora,
       actualizadoEn: ctx.ahora,
-      historial: [{ estado: "REGISTRADO", nota: null, fecha: ctx.ahora, usuario }],
+      historial: [{ estado: "REGISTRADO", nota: ctx.notaRegistro?.trim() || null, fecha: ctx.ahora, usuario }],
       evidencia: null,
+      integracionId: integracion?.id ?? null,
+      integracionNombre: integracion?.nombre ?? null,
+      referenciaExterna,
     });
   }
 
@@ -199,6 +225,22 @@ export class Envio {
     };
     this.props.actualizadoEn = ctx.ahora;
     return anterior;
+  }
+
+  /** Canal por el que ingresó: PANEL o API (+ integración). */
+  get origen(): OrigenEnvio {
+    const id = this.props.integracionId ?? null;
+    return id
+      ? { canal: "API", integracionId: id, integracion: this.props.integracionNombre ?? null }
+      : { canal: "PANEL", integracionId: null, integracion: null };
+  }
+
+  get integracionId(): string | null {
+    return this.props.integracionId ?? null;
+  }
+
+  get referenciaExterna(): string | null {
+    return this.props.referenciaExterna ?? null;
   }
 
   get evidencia(): EvidenciaEntrega | null {

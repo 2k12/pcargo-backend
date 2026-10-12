@@ -6,6 +6,7 @@ import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, toEventoDTO, type EnvioDTO, type EventoHistorialDTO } from "../../dto/EnvioDTO.js";
 import type { EnvioRepository, FiltroEnvios, Paginacion, RutaRepository } from "../../ports/repositories.js";
 import type { Clock } from "../../ports/services.js";
+import type { EmisorWebhooks } from "../integraciones/EmisorWebhooks.js";
 
 /** Para búsquedas: un número fuera de rango simplemente no filtra por guía. */
 function parsearNumeroGuiaSeguro(texto: string): number | undefined {
@@ -76,6 +77,7 @@ export class CambiarEstadoEnvio {
     private readonly envios: EnvioRepository,
     private readonly rutas: RutaRepository,
     private readonly clock: Clock,
+    private readonly webhooks?: EmisorWebhooks,
   ) {}
 
   async ejecutar(actor: Actor, id: string, estado: string, nota?: string | null): Promise<EnvioDTO> {
@@ -83,8 +85,11 @@ export class CambiarEstadoEnvio {
     const envio = await this.envios.buscarPorId(id);
     if (!envio) throw new DomainError("NO_ENCONTRADO", "Envío no encontrado");
     envio.cambiarEstado(estado, { ahora: this.clock.ahora(), actor, nota });
-    await this.envios.guardar(envio);
-    return toEnvioDTO(envio, (await this.rutas.buscarPorId(envio.rutaId)) ?? undefined, true);
+    const ruta = (await this.rutas.buscarPorId(envio.rutaId)) ?? undefined;
+    // Envíos de una empresa: el webhook se encola en la misma transacción que el cambio de estado.
+    const webhooks = (await this.webhooks?.entregasPara(envio, ruta, "envio.estado_actualizado")) ?? [];
+    await this.envios.guardar(envio, { webhooks });
+    return toEnvioDTO(envio, ruta, true);
   }
 }
 

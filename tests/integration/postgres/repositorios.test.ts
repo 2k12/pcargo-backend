@@ -18,11 +18,35 @@ import { crearPool, type Db } from "../../../src/infrastructure/persistence/post
 import { InMemoryClienteRepository } from "../../../src/infrastructure/persistence/memory/InMemoryClienteRepository.js";
 import { PgClienteRepository } from "../../../src/infrastructure/persistence/postgres/PgClienteRepository.js";
 import { contratoRepositorios } from "../../helpers/contrato-repositorios.js";
+import {
+  InMemoryEntregaWebhookRepository,
+  InMemoryIdempotenciaRepository,
+  InMemoryIntegracionRepository,
+  InMemorySolicitudApiRepository,
+} from "../../../src/infrastructure/persistence/memory/InMemoryIntegraciones.js";
+import {
+  PgEntregaWebhookRepository,
+  PgIdempotenciaRepository,
+  PgIntegracionRepository,
+  PgSolicitudApiRepository,
+} from "../../../src/infrastructure/persistence/postgres/PgIntegraciones.js";
 
 contratoRepositorios("memoria", async () => {
   const ciudades = ciudadesSemilla();
+  const entregasWebhook = new InMemoryEntregaWebhookRepository();
+  const solicitudesApi = new InMemorySolicitudApiRepository();
+  const idempotencia = new InMemoryIdempotenciaRepository();
+  const integraciones = new InMemoryIntegracionRepository((id) => {
+    entregasWebhook.eliminarDeIntegracion(id);
+    solicitudesApi.eliminarDeIntegracion(id);
+    idempotencia.eliminarDeIntegracion(id);
+  });
   return {
-    envios: new InMemoryEnvioRepository(),
+    integraciones,
+    entregasWebhook,
+    solicitudesApi,
+    idempotencia,
+    envios: new InMemoryEnvioRepository({ outbox: entregasWebhook, nombreIntegracion: integraciones.nombre }),
     rutas: new InMemoryRutaRepository(ciudades),
     ciudades: new InMemoryCiudadRepository(ciudades),
     clientes: new InMemoryClienteRepository(),
@@ -51,7 +75,9 @@ describe.skipIf(!url)("PostgreSQL", () => {
   });
 
   contratoRepositorios("postgres", async () => {
-    await db.query("TRUNCATE envios, envio_items, historial_estados, clientes");
+    await db.query(
+      "TRUNCATE envios, envio_items, historial_estados, clientes, integraciones, api_keys, api_idempotencia, api_solicitudes, webhook_entregas CASCADE",
+    );
     await db.query("DELETE FROM rutas WHERE origen_id > 4 OR destino_id > 4");
     await db.query("DELETE FROM ciudades WHERE id > 4");
     await db.query("UPDATE ciudades SET activa = TRUE");
@@ -66,11 +92,15 @@ describe.skipIf(!url)("PostgreSQL", () => {
       clientes: new PgClienteRepository(db),
       tiposCarga: new PgTipoCargaRepository(db),
       usuarios: new PgUsuarioRepository(db),
+      integraciones: new PgIntegracionRepository(db),
+      entregasWebhook: new PgEntregaWebhookRepository(db),
+      solicitudesApi: new PgSolicitudApiRepository(db),
+      idempotencia: new PgIdempotenciaRepository(db),
     };
   });
 
   it("migración 009: los envíos existentes quedan sin dirección ni evidencia, y las restricciones se cumplen", async () => {
-    await db.query("TRUNCATE envios, envio_items, historial_estados, clientes");
+    await db.query("TRUNCATE envios, envio_items, historial_estados, clientes CASCADE");
     const id = "00000000-0000-4000-d000-000000000009";
     await db.query(
       `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,

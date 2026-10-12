@@ -1,6 +1,7 @@
 import { TIPOS_CARGA, type TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
 import { ESTADOS, type EstadoEnvio } from "../../../domain/envio/EstadoEnvio.js";
 import { FORMAS_PAGO, type FormaPago } from "../../../domain/envio/FormaPago.js";
+import type { Canal } from "../../../domain/integracion/Integracion.js";
 import { nombreRuta } from "../../../domain/ruta/Ruta.js";
 import { DomainError, redondear2 } from "../../../domain/shared/DomainError.js";
 import type { ClienteRepository, EnvioRepository, RutaRepository } from "../../ports/repositories.js";
@@ -8,6 +9,8 @@ import type { Clock } from "../../ports/services.js";
 
 export interface FiltroResumen {
   clienteId?: string;
+  canal?: Canal;
+  integracionId?: string;
   /** Fechas locales de Ecuador `YYYY-MM-DD`, ambas inclusive. */
   desde?: string;
   hasta?: string;
@@ -29,6 +32,8 @@ export interface Resumen {
   porDia: { fecha: string; envios: number; ingresos: number }[];
   /** Ordenado por monto; `clienteId: null` agrupa los envíos sin cliente registrado. */
   porCliente: { clienteId: string | null; nombre: string; envios: number; monto: number }[];
+  /** Por canal de ingreso: el panel y cada integración (ordenado por monto). */
+  porCanal: { canal: Canal; integracionId: string | null; nombre: string; envios: number; monto: number }[];
 }
 
 /** Ecuador continental no tiene horario de verano: UTC−5 todo el año. */
@@ -85,7 +90,11 @@ export class ObtenerResumen {
       throw new DomainError("VALIDACION", "La fecha inicial no puede ser posterior a la final");
     }
     const [todos, rutas, clientes] = await Promise.all([
-      this.envios.listar(filtro.clienteId ? { clienteId: filtro.clienteId } : {}),
+      this.envios.listar({
+        ...(filtro.clienteId ? { clienteId: filtro.clienteId } : {}),
+        ...(filtro.canal ? { canal: filtro.canal } : {}),
+        ...(filtro.integracionId ? { integracionId: filtro.integracionId } : {}),
+      }),
       this.rutas.listar(),
       this.clientes ? this.clientes.listar() : Promise.resolve([]),
     ]);
@@ -96,6 +105,8 @@ export class ObtenerResumen {
     const porRuta = new Map<number, Acumulado>();
     const porCliente = new Map<string | null, Acumulado>();
     const porDia = new Map<string, Acumulado>();
+    const porCanal = new Map<string | null, Acumulado>();
+    const nombresIntegracion = new Map<string, string>();
     let totalEnvios = 0;
     let ingresos = 0;
     let porCobrar = 0;
@@ -119,6 +130,9 @@ export class ObtenerResumen {
       acumular(porRuta, s.rutaId, monto);
       acumular(porCliente, e.clienteId, monto);
       acumular(porDia, dia, monto);
+      const origen = e.origen;
+      acumular(porCanal, origen.integracionId, monto);
+      if (origen.integracionId) nombresIntegracion.set(origen.integracionId, origen.integracion ?? "Integración eliminada");
       if (!primerDia || dia < primerDia) primerDia = dia;
     }
 
@@ -152,6 +166,15 @@ export class ObtenerResumen {
         .map(([clienteId, v]) => ({
           clienteId,
           nombre: clienteId ? (nombresCliente.get(clienteId) ?? "Cliente eliminado") : "Sin cliente registrado",
+          envios: v.envios,
+          monto: redondear2(v.monto),
+        }))
+        .sort((a, b) => b.monto - a.monto || b.envios - a.envios),
+      porCanal: [...porCanal]
+        .map(([integracionId, v]) => ({
+          canal: (integracionId ? "API" : "PANEL") as Canal,
+          integracionId,
+          nombre: integracionId ? (nombresIntegracion.get(integracionId) ?? "Integración") : "Panel",
           envios: v.envios,
           monto: redondear2(v.monto),
         }))

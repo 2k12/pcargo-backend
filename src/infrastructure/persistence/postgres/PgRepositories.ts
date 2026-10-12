@@ -3,7 +3,9 @@ import type {
   CambiosRuta,
   CiudadRepository,
   EnvioRepository,
+  EstadisticaIntegracion,
   FiltroEnvios,
+  OpcionesGuardarEnvio,
   Paginacion,
   NuevaRuta,
   RutaRepository,
@@ -19,6 +21,7 @@ import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
 import type { Zona } from "../../../domain/tarifa/Zona.js";
 import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
+import { insertarEntregas } from "./PgIntegraciones.js";
 import type { Db } from "./pool.js";
 
 export class PgUsuarioRepository implements UsuarioRepository {
@@ -117,7 +120,15 @@ export class PgCiudadRepository implements CiudadRepository {
   }
 
   async eliminar(id: number): Promise<void> {
-    await this.db.query("DELETE FROM ciudades WHERE id = $1", [id]);
+    try {
+      await this.db.query("DELETE FROM ciudades WHERE id = $1", [id]);
+    } catch (e) {
+      // Otra tabla la referencia (p. ej. la ciudad de origen de una integración).
+      if ((e as { code?: string }).code === "23503") {
+        throw new DomainError("CONFLICTO", "La ciudad está en uso (por ejemplo, como origen de una integración): desactívela");
+      }
+      throw e;
+    }
   }
 }
 
@@ -265,6 +276,9 @@ interface EnvioRow {
   evidencia_subida_por: string | null;
   evidencia_subida_por_nombre: string | null;
   evidencia_clave: string | null;
+  integracion_id: string | null;
+  integracion_nombre: string | null;
+  referencia_externa: string | null;
 }
 
 const aEvidencia = (r: EnvioRow): EvidenciaEntrega | null =>
@@ -303,7 +317,7 @@ export class PgEnvioRepository implements EnvioRepository {
   constructor(private readonly db: Db) {}
 
   /** Upsert del agregado; ítems solo al crear (son inmutables); eventos de historial nuevos. Todo en una transacción. */
-  async guardar(envio: Envio): Promise<void> {
+  async guardar(envio: Envio, opciones: OpcionesGuardarEnvio = {}): Promise<void> {
     const s = envio.toSnapshot();
     const ev = s.evidencia ?? null;
     const client = await this.db.connect();
@@ -314,8 +328,8 @@ export class PgEnvioRepository implements EnvioRepository {
             destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, descripcion,
             costo, forma_pago, estado, creado_por, creado_en, actualizado_en, cliente_id, zona,
             remitente_direccion, evidencia_recibido_por, evidencia_tipo, evidencia_bytes, evidencia_subida_en,
-            evidencia_subida_por, evidencia_clave)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+            evidencia_subida_por, evidencia_clave, integracion_id, referencia_externa)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
          ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en,
             evidencia_recibido_por = EXCLUDED.evidencia_recibido_por, evidencia_tipo = EXCLUDED.evidencia_tipo,
             evidencia_bytes = EXCLUDED.evidencia_bytes, evidencia_subida_en = EXCLUDED.evidencia_subida_en,
@@ -327,7 +341,7 @@ export class PgEnvioRepository implements EnvioRepository {
           s.descripcion, s.costo, s.formaPago, s.estado, s.creadoPor, s.creadoEn, s.actualizadoEn,
           s.clienteId ?? null, s.zona, s.remitente.direccion,
           ev?.recibidoPor ?? null, ev?.tipo ?? null, ev?.bytes ?? null, ev?.subidaEn ?? null,
-          ev?.subidaPor?.id ?? null, ev?.clave ?? null,
+          ev?.subidaPor?.id ?? null, ev?.clave ?? null, s.integracionId ?? null, s.referenciaExterna ?? null,
         ],
       );
       if (upsert.rows[0]?.nuevo) {
@@ -349,12 +363,17 @@ export class PgEnvioRepository implements EnvioRepository {
           [s.id, ev.estado, ev.nota, ev.usuario?.id ?? null, ev.fecha],
         );
       }
+      // Outbox: los webhooks quedan encolados solo si el cambio del envío se confirma.
+      await insertarEntregas(client, opciones.webhooks ?? []);
       await client.query("COMMIT");
     } catch (e) {
       await client.query("ROLLBACK");
       // Carrera entre dos registros con el mismo número de guía: la restricción UNIQUE decide.
       if ((e as { code?: string; constraint?: string }).code === "23505" && (e as { constraint?: string }).constraint === "envios_numero_guia_key") {
         throw new DomainError("CONFLICTO", `La guía ${s.numeroGuia} ya está registrada`);
+      }
+      if ((e as { code?: string; constraint?: string }).code === "23505" && (e as { constraint?: string }).constraint === "envios_integracion_referencia_key") {
+        throw new DomainError("CONFLICTO", `Ya existe un envío con la referencia ${s.referenciaExterna}`);
       }
       throw e;
     } finally {
@@ -368,6 +387,18 @@ export class PgEnvioRepository implements EnvioRepository {
 
   async buscarPorNumeroGuia(numeroGuia: number): Promise<Envio | null> {
     return (await this.consultar("WHERE e.numero_guia = $1", [numeroGuia]))[0] ?? null;
+  }
+
+  async buscarPorReferencia(integracionId: string, referenciaExterna: string): Promise<Envio | null> {
+    return (await this.consultar("WHERE e.integracion_id = $1 AND e.referencia_externa = $2", [integracionId, referenciaExterna]))[0] ?? null;
+  }
+
+  async estadisticasPorIntegracion(): Promise<Map<string, EstadisticaIntegracion>> {
+    const { rows } = await this.db.query<{ id: string; n: number; ultimo: Date }>(
+      `SELECT integracion_id AS id, count(*)::int AS n, max(creado_en) AS ultimo
+         FROM envios WHERE integracion_id IS NOT NULL GROUP BY integracion_id`,
+    );
+    return new Map(rows.map((r) => [r.id, { envios: r.n, ultimoEnvio: r.ultimo }]));
   }
 
   async existeNumeroGuia(numeroGuia: number): Promise<boolean> {
@@ -401,10 +432,15 @@ export class PgEnvioRepository implements EnvioRepository {
     if (f.rutaId) cond.push(`e.ruta_id = $${params.push(f.rutaId)}`);
     if (f.formaPago) cond.push(`e.forma_pago = $${params.push(f.formaPago)}`);
     if (f.clienteId) cond.push(`e.cliente_id = $${params.push(f.clienteId)}`);
+    if (f.canal) cond.push(f.canal === "API" ? "e.integracion_id IS NOT NULL" : "e.integracion_id IS NULL");
+    if (f.integracionId) cond.push(`e.integracion_id = $${params.push(f.integracionId)}`);
     if (f.q?.trim()) {
-      const i = params.push(`%${f.q.trim()}%`);
+      // Los comodines de LIKE en el texto buscado se escapan: "%" o "_" se buscan literalmente.
+      const i = params.push(`%${f.q.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
       const porGuia = f.numeroGuia ? `e.numero_guia = $${params.push(f.numeroGuia)} OR ` : "";
-      cond.push(`(${porGuia}e.remitente_nombre ILIKE $${i} OR e.destinatario_nombre ILIKE $${i})`);
+      cond.push(
+        `(${porGuia}e.remitente_nombre ILIKE $${i} OR e.destinatario_nombre ILIKE $${i} OR e.referencia_externa ILIKE $${i})`,
+      );
     }
     return { where: cond.length ? `WHERE ${cond.join(" AND ")}` : "", params };
   }
@@ -418,8 +454,9 @@ export class PgEnvioRepository implements EnvioRepository {
     const p = [...params];
     const limite = pagina ? ` LIMIT $${p.push(pagina.limite)} OFFSET $${p.push(pagina.desde)}` : "";
     const { rows } = await this.db.query<EnvioRow>(
-      `SELECT e.*, ue.nombre AS evidencia_subida_por_nombre
+      `SELECT e.*, ue.nombre AS evidencia_subida_por_nombre, ig.nombre AS integracion_nombre
          FROM envios e LEFT JOIN usuarios ue ON ue.id = e.evidencia_subida_por
+         LEFT JOIN integraciones ig ON ig.id = e.integracion_id
        ${where} ORDER BY e.creado_en DESC, e.id DESC${limite}`,
       p,
     );
@@ -482,6 +519,9 @@ export class PgEnvioRepository implements EnvioRepository {
         actualizadoEn: r.actualizado_en,
         historial: porEnvio.get(r.id) ?? [],
         evidencia: aEvidencia(r),
+        integracionId: r.integracion_id,
+        integracionNombre: r.integracion_nombre,
+        referenciaExterna: r.referencia_externa,
       }),
     );
   }

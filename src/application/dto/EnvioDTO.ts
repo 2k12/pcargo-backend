@@ -1,5 +1,6 @@
 import type { Envio, EventoHistorial, ItemEnvio } from "../../domain/envio/Envio.js";
 import type { EvidenciaEntrega } from "../../domain/envio/Evidencia.js";
+import type { OrigenEnvio } from "../../domain/integracion/Integracion.js";
 import type { Ruta } from "../../domain/ruta/Ruta.js";
 
 export interface EventoHistorialDTO {
@@ -46,6 +47,9 @@ export interface EnvioDTO {
   registro: GestionDTO;
   entrega: GestionEntregaDTO | null;
   evidencia: EvidenciaEntregaDTO | null;
+  /** PANEL o API (+ integración). */
+  origen: OrigenEnvio;
+  referenciaExterna: string | null;
   creadoEn: string;
   actualizadoEn: string;
   historial?: EventoHistorialDTO[];
@@ -87,6 +91,8 @@ export function toEnvioDTO(envio: Envio, ruta: Ruta | undefined, conHistorial = 
     registro: { fecha: envio.registro.fecha.toISOString(), operador: envio.registro.operador },
     entrega: entrega && { ...entrega, fecha: entrega.fecha.toISOString() },
     evidencia: s.evidencia ? toEvidenciaDTO(s.evidencia) : null,
+    origen: envio.origen,
+    referenciaExterna: envio.referenciaExterna,
     creadoEn: s.creadoEn.toISOString(),
     actualizadoEn: s.actualizadoEn.toISOString(),
     ...(conHistorial ? { historial: s.historial.map(toEventoDTO) } : {}),

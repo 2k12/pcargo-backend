@@ -9,6 +9,7 @@ import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, type EnvioDTO } from "../../dto/EnvioDTO.js";
 import type { EnvioRepository, RutaRepository } from "../../ports/repositories.js";
 import type { AlmacenArchivos, Clock, IdGenerator } from "../../ports/services.js";
+import type { EmisorWebhooks } from "../integraciones/EmisorWebhooks.js";
 
 export interface SolicitudEvidencia {
   /** Contenido del archivo subido (`null` si no se adjuntó). */
@@ -36,6 +37,7 @@ export class SubirEvidencia {
     private readonly almacen: AlmacenArchivos,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
+    private readonly webhooks?: EmisorWebhooks,
   ) {}
 
   async ejecutar(actor: Actor, envioId: string, s: SolicitudEvidencia): Promise<EnvioDTO> {
@@ -51,15 +53,17 @@ export class SubirEvidencia {
       { recibidoPor, tipo, bytes: foto.length, clave },
       { ahora: this.clock.ahora(), actor },
     );
+    const ruta = (await this.rutas.buscarPorId(envio.rutaId)) ?? undefined;
+    const webhooks = (await this.webhooks?.entregasPara(envio, ruta, "envio.evidencia_registrada")) ?? [];
     await this.almacen.guardar(clave, foto, tipo);
     try {
-      await this.envios.guardar(envio);
+      await this.envios.guardar(envio, { webhooks });
     } catch (e) {
       await eliminarSinFallar(this.almacen, clave); // sin metadatos la foto nueva quedaría huérfana
       throw e;
     }
     if (anterior && anterior.clave !== clave) await eliminarSinFallar(this.almacen, anterior.clave);
-    return toEnvioDTO(envio, (await this.rutas.buscarPorId(envio.rutaId)) ?? undefined, true);
+    return toEnvioDTO(envio, ruta, true);
   }
 }
 

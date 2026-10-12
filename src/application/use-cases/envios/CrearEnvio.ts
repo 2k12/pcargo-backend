@@ -2,16 +2,18 @@ import type { Contacto, Destinatario } from "../../../domain/envio/Envio.js";
 import { Envio } from "../../../domain/envio/Envio.js";
 import { esFormaPago } from "../../../domain/envio/FormaPago.js";
 import { parsearNumeroGuia } from "../../../domain/envio/NumeroGuia.js";
+import type { Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, type EnvioDTO } from "../../dto/EnvioDTO.js";
 import type { ClienteRepository, EnvioRepository } from "../../ports/repositories.js";
 import type { Clock, IdGenerator } from "../../ports/services.js";
 import { obtenerOCrearCliente } from "../clientes/Clientes.js";
+import type { EmisorWebhooks } from "../integraciones/EmisorWebhooks.js";
 import type { CotizarEnvio, ItemSolicitud } from "./CotizarEnvio.js";
 
 export interface SolicitudEnvio {
-  remitente: Contacto;
+  remitente: Contacto & { direccion?: string | null };
   destinatario: Destinatario;
   rutaId: number;
   items: ItemSolicitud[];
@@ -29,6 +31,18 @@ export interface SolicitudEnvio {
   consentimientoCliente?: unknown;
 }
 
+/** Cómo se registra el envío: desde el panel (con operador) o por la API de una empresa. */
+export interface OpcionesRegistro {
+  /** null = sin operador (API de empresas). */
+  actor: Actor | null;
+  integracion?: { id: string; nombre: string };
+  referenciaExterna?: string;
+  /** Nota del evento REGISTRADO. */
+  notaRegistro?: string;
+  /** Modo prueba: valida y cotiza igual, pero no asigna guía, no guarda nada ni dispara webhooks. */
+  simular?: boolean;
+}
+
 const MAX_INTENTOS_GUIA = 5;
 
 export class CrearEnvio {
@@ -38,9 +52,20 @@ export class CrearEnvio {
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
     private readonly clientes?: ClienteRepository,
+    private readonly webhooks?: EmisorWebhooks,
   ) {}
 
+  /** Envío desde el panel. */
   async ejecutar(actor: Actor, s: SolicitudEnvio): Promise<EnvioDTO> {
+    const { envio, ruta } = await this.registrar(s, { actor });
+    return toEnvioDTO(envio, ruta, true);
+  }
+
+  /**
+   * Lógica común del panel y de la API de empresas: cotiza con la tarifa vigente (el costo cobrado es el cotizado),
+   * valida, resuelve el cliente, asigna la guía y guarda el envío junto con sus webhooks (outbox).
+   */
+  async registrar(s: SolicitudEnvio, o: OpcionesRegistro): Promise<{ envio: Envio; ruta: Ruta }> {
     if (!esFormaPago(s.formaPago)) throw new DomainError("VALIDACION", `Forma de pago desconocida: ${s.formaPago}`);
     const { ruta, cotizacion } = await this.cotizador.resolver(s);
     const datos = {
@@ -57,12 +82,41 @@ export class CrearEnvio {
       zona: cotizacion.zona,
       formaPago: s.formaPago,
       descripcion: s.descripcion,
+      integracion: o.integracion ?? null,
+      referenciaExterna: o.referenciaExterna ?? null,
     };
-    const ctx = { id: this.ids.uuid(), numeroGuia: await this.numeroGuia(s.numeroGuia), ahora: this.clock.ahora(), actor };
-    Envio.crear(datos, ctx); // valida remitente/destinatario antes de dar de alta un cliente
-    const envio = Envio.crear({ ...datos, clienteId: await this.cliente(s) }, ctx);
-    await this.envios.guardar(envio);
-    return toEnvioDTO(envio, ruta, true);
+    const automatica = s.numeroGuia === undefined || s.numeroGuia === null || String(s.numeroGuia).trim() === "";
+    const base = { ahora: this.clock.ahora(), actor: o.actor, notaRegistro: o.notaRegistro ?? null };
+
+    if (o.simular) {
+      const ctx = { ...base, id: `prueba_${this.ids.uuid()}`, numeroGuia: 0 };
+      Envio.crear(datos, ctx);
+      // Solo lectura: en modo prueba nunca se da de alta un cliente.
+      const clienteId = s.guardarCliente ? null : await this.cliente(s);
+      return { envio: Envio.crear({ ...datos, clienteId }, ctx), ruta };
+    }
+
+    const id = this.ids.uuid();
+    Envio.crear(datos, { ...base, id, numeroGuia: 0 }); // valida remitente/destinatario antes de dar de alta un cliente
+    const clienteId = await this.cliente(s);
+    for (let intento = 1; ; intento++) {
+      const envio = Envio.crear({ ...datos, clienteId }, { ...base, id, numeroGuia: await this.numeroGuia(s.numeroGuia) });
+      const webhooks = (await this.webhooks?.entregasPara(envio, ruta, "envio.creado")) ?? [];
+      try {
+        await this.envios.guardar(envio, { webhooks });
+        return { envio, ruta };
+      } catch (e) {
+        // Dos registros simultáneos con guía automática pueden tomar el mismo consecutivo: se reintenta con otro.
+        const choqueDeGuia =
+          automatica &&
+          e instanceof DomainError &&
+          e.code === "CONFLICTO" &&
+          intento < MAX_INTENTOS_GUIA &&
+          (await this.envios.existeNumeroGuia(envio.numeroGuia)) &&
+          !(await this.envios.buscarPorId(id));
+        if (!choqueDeGuia) throw e;
+      }
+    }
   }
 
   /**
