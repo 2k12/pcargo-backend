@@ -12,7 +12,7 @@ type Resultado<C extends Caso> = Awaited<ReturnType<C["ejecutar"]>>;
 
 /** Espacios de claves. Invalidar un espacio borra todas sus entradas. */
 export const ESPACIOS = {
-  /** Ciudades, tipos de carga, rutas y catálogo público: cambian poco y se leen en cada pantalla. */
+  /** Ciudades, tipos de carga, rutas, artículos restringidos y catálogo público: cambian poco y se leen mucho. */
   catalogo: "catalogo:",
   /** Resumen del dashboard: recorre todos los envíos, es la consulta más cara. */
   dashboard: "dashboard:",
@@ -23,11 +23,12 @@ export const ESPACIOS = {
 /**
  * Versión de la forma de los datos del catálogo (tipos de carga, rutas). Va dentro de la clave para que, al
  * desplegar un cambio de contrato, la API nunca lea entradas con la forma vieja que queden en un Redis
- * compartido (p. ej. tipos con `factor` o rutas con `tarifaBase` de v7). Invalidar `catalogo:` las borra todas.
+ * compartido (p. ej. tipos con `factor` o rutas con `tarifaBase` de v7, o tipos sin `activo` de v8). Invalidar
+ * `catalogo:` las borra todas.
  */
-export const VERSION_CATALOGO = "v8";
+export const VERSION_CATALOGO = "v11";
 
-/** Clave dentro del espacio del catálogo: `catalogo:v8:<nombre>`. */
+/** Clave dentro del espacio del catálogo: `catalogo:v11:<nombre>`. */
 export const claveCatalogo = (nombre: string): string => `${ESPACIOS.catalogo}${VERSION_CATALOGO}:${nombre}`;
 
 /** TTL en segundos: acotan cuánto puede verse un dato viejo si una invalidación falla. */

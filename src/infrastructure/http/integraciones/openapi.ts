@@ -1,11 +1,10 @@
-import { TIPOS_CARGA } from "../../../domain/carga/TipoCarga.js";
 import { ESTADOS } from "../../../domain/envio/EstadoEnvio.js";
 import { FORMAS_PAGO } from "../../../domain/envio/FormaPago.js";
 import { ALCANCES, EVENTOS_WEBHOOK } from "../../../domain/integracion/Integracion.js";
 import { MAX_CANTIDAD, MAX_ITEMS } from "../../../domain/tarifa/calcularTarifa.js";
 import { ZONAS } from "../../../domain/tarifa/Zona.js";
 
-// Especificación OpenAPI 3.1 de la API para empresas (escrita a mano a partir del contrato v10).
+// Especificación OpenAPI 3.1 de la API para empresas (escrita a mano a partir del contrato v11).
 // Se sirve en GET /api/v1/integraciones/openapi.json (pública).
 
 const ref = (nombre: string) => ({ $ref: `#/components/schemas/${nombre}` });
@@ -78,12 +77,39 @@ const error = (codigos: string[]) => ({
   },
 });
 
+/** v11: los tipos de carga son configurables; la lista vigente (solo activos) está en GET /cobertura. */
+const tipoCarga = {
+  type: "string",
+  pattern: "^[A-Z][A-Z0-9_]{1,29}$",
+  description:
+    "Código de un tipo de carga activo (p. ej. SOBRE, PAQUETE, CARTON). Consulte la lista vigente en `GET /cobertura` " +
+    "(`tiposCarga`). Inexistente → 422 `VALIDACION`; desactivado → 422 `TIPO_CARGA_INACTIVO`.",
+};
+
+const tipoCargaPublico = {
+  type: "object",
+  required: ["codigo", "nombre", "precio", "precioRural", "mayoreo", "pesoMaxKg"],
+  properties: {
+    codigo: { type: "string" },
+    nombre: { type: "string" },
+    precio: { type: "number", description: "USD por unidad, zona urbana" },
+    precioRural: { type: ["number", "null"], description: "USD por unidad en zona rural; null = el mismo precio" },
+    mayoreo: {
+      type: ["object", "null"],
+      required: ["minimoExclusivo", "precio"],
+      description: "Con MÁS de `minimoExclusivo` unidades del tipo en el envío, todas cuestan `precio`.",
+      properties: { minimoExclusivo: { type: "integer" }, precio: { type: "number" } },
+    },
+    pesoMaxKg: { type: "number", description: "Peso máximo por unidad (kg)" },
+  },
+};
+
 const item = {
   type: "object",
   additionalProperties: false,
   required: ["tipoCarga", "cantidad", "pesoKg"],
   properties: {
-    tipoCarga: { type: "string", enum: [...TIPOS_CARGA] },
+    tipoCarga,
     cantidad: { type: "integer", minimum: 1, maximum: MAX_CANTIDAD },
     pesoKg: { type: "number", exclusiveMinimum: 0, description: "Peso por unidad (kg); no puede superar el máximo del tipo." },
   },
@@ -93,7 +119,7 @@ const itemEnvio = {
   type: "object",
   required: ["tipoCarga", "cantidad", "pesoKg", "costoUnitario", "subtotal"],
   properties: {
-    tipoCarga: { type: "string", enum: [...TIPOS_CARGA] },
+    tipoCarga: { type: "string" },
     cantidad: { type: "integer" },
     pesoKg: { type: "number" },
     costoUnitario: { type: "number" },
@@ -206,7 +232,7 @@ export function especificacionOpenApi(): object {
     openapi: "3.1.0",
     info: {
       title: "PCargo — API para empresas",
-      version: "1.0.0",
+      version: "1.1.0",
       description: DESCRIPCION,
       contact: { name: "PCargo" },
     },
@@ -218,7 +244,7 @@ export function especificacionOpenApi(): object {
         get: {
           tags: ["Cobertura"],
           operationId: "obtenerCobertura",
-          summary: "Ciudades a las que se puede enviar desde su ciudad de origen",
+          summary: "Ciudades a las que se puede enviar desde su ciudad de origen y tipos de carga disponibles",
           description: "Alcance: cualquiera.",
           responses: {
             "200": { description: "Cobertura", ...json(ref("Cobertura")) },
@@ -382,7 +408,7 @@ export function especificacionOpenApi(): object {
         },
         NoProcesable: {
           description: "Regla de negocio incumplida",
-          ...json(error(["RUTA_NO_DISPONIBLE", "PESO_INVALIDO", "IDEMPOTENCIA_CONFLICTO", "VALIDACION"])),
+          ...json(error(["RUTA_NO_DISPONIBLE", "PESO_INVALIDO", "TIPO_CARGA_INACTIVO", "IDEMPOTENCIA_CONFLICTO", "VALIDACION"])),
         },
         DemasiadasSolicitudes: {
           description: "Límite de tasa superado (120/min por integración)",
@@ -393,9 +419,10 @@ export function especificacionOpenApi(): object {
       schemas: {
         ItemSolicitud: item,
         ItemEnvio: itemEnvio,
+        TipoCarga: tipoCargaPublico,
         Cobertura: {
           type: "object",
-          required: ["origen", "destinos"],
+          required: ["origen", "destinos", "tiposCarga"],
           properties: {
             origen: { type: "string" },
             destinos: {
@@ -406,6 +433,7 @@ export function especificacionOpenApi(): object {
                 properties: { ciudad: { type: "string" }, tiempoEstimadoMin: { type: "integer" } },
               },
             },
+            tiposCarga: { type: "array", items: ref("TipoCarga"), description: "Tipos de carga activos, en orden de presentación" },
           },
         },
         SolicitudCotizacion: {

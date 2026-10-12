@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TIPOS_CARGA } from "../../../domain/carga/TipoCarga.js";
+import { CODIGO_TIPO_CARGA } from "../../../domain/carga/TipoCarga.js";
 import { FORMAS_PAGO } from "../../../domain/envio/FormaPago.js";
 import { REFERENCIA_EXTERNA } from "../../../domain/integracion/EnvioExterno.js";
 import { MAX_CANTIDAD, MAX_ITEMS } from "../../../domain/tarifa/calcularTarifa.js";
@@ -11,7 +11,8 @@ import { ZONAS } from "../../../domain/tarifa/Zona.js";
 const texto = (max: number) => z.string().trim().min(1, "obligatorio").max(max);
 
 const itemSchema = z.strictObject({
-  tipoCarga: z.enum(TIPOS_CARGA),
+  // v11: catálogo configurable. Inexistente → 422 VALIDACION; inactivo → 422 TIPO_CARGA_INACTIVO (ver /cobertura).
+  tipoCarga: z.string().regex(CODIGO_TIPO_CARGA, "código de tipo de carga inválido (consulte GET /cobertura)"),
   cantidad: z.number().int().min(1).max(MAX_CANTIDAD),
   pesoKg: z.number().positive().max(1000),
 });

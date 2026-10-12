@@ -11,14 +11,16 @@ import type {
   RutaRepository,
   TipoCargaRepository,
   UsuarioRepository,
+  ArticuloRestringidoRepository,
 } from "../../../application/ports/repositories.js";
-import type { TipoCarga, TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
+import { exigirAlgunoActivo, type CambioTipoCarga, type TipoCarga, type TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
+import { compararArticulos, type ArticuloRestringido } from "../../../domain/catalogo/ArticuloRestringido.js";
 import { Envio, type EnvioProps } from "../../../domain/envio/Envio.js";
 import type { EntregaWebhook } from "../../../domain/integracion/Webhook.js";
 import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
-import { CIUDADES, RUTAS_SEED, TIPOS_CARGA_SEED } from "../seed-data.js";
+import { ARTICULOS_SEED, CIUDADES, RUTAS_SEED, TIPOS_CARGA_SEED } from "../seed-data.js";
 
 // Adaptadores en memoria: usados en tests y en `DB_DRIVER=memory` (demo sin Postgres).
 
@@ -103,17 +105,124 @@ export class InMemoryCiudadRepository implements CiudadRepository {
   }
 }
 
-/** Copia profunda: quien lee el catálogo no puede alterar la semilla compartida. */
-const copiaTipo = (t: TipoCarga): TipoCarga => ({ ...t, mayoreo: t.mayoreo && { ...t.mayoreo } });
+/** Copia profunda: quien lee el catálogo no puede alterar la semilla ni el estado guardado. */
+const copiaTipo = (t: TipoCarga): TipoCarga => ({
+  ...t,
+  mayoreo: t.mayoreo && { ...t.mayoreo },
+  actualizadoEn: t.actualizadoEn && new Date(t.actualizadoEn),
+});
+const copiaCambio = (c: CambioTipoCarga): CambioTipoCarga => structuredClone(c);
+const mismoNombreTipo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+export interface OpcionesTipoCargaMemoria {
+  /** ¿Algún envío usa el tipo? (en Postgres lo garantiza la FK de envio_items). */
+  usaTipoCarga?: (codigo: TipoCargaCodigo) => Promise<boolean>;
+}
 
 export class InMemoryTipoCargaRepository implements TipoCargaRepository {
-  constructor(private readonly tipos: TipoCarga[] = TIPOS_CARGA_SEED) {}
-  async listar(): Promise<TipoCarga[]> {
-    return this.tipos.map(copiaTipo);
+  private tipos: TipoCarga[];
+  private readonly historial: CambioTipoCarga[] = [];
+
+  constructor(
+    semilla: readonly TipoCarga[] = TIPOS_CARGA_SEED,
+    private readonly opciones: OpcionesTipoCargaMemoria = {},
+  ) {
+    this.tipos = semilla.map(copiaTipo);
   }
+
+  async listar(filtro: { activos?: boolean } = {}): Promise<TipoCarga[]> {
+    return this.tipos
+      .filter((t) => !filtro.activos || t.activo)
+      .sort((a, b) => a.orden - b.orden || (a.codigo < b.codigo ? -1 : a.codigo > b.codigo ? 1 : 0))
+      .map(copiaTipo);
+  }
+
   async buscarPorCodigo(codigo: TipoCargaCodigo): Promise<TipoCarga | null> {
     const t = this.tipos.find((x) => x.codigo === codigo);
     return t ? copiaTipo(t) : null;
+  }
+
+  async existeNombre(nombre: string, excluirCodigo?: TipoCargaCodigo): Promise<boolean> {
+    return this.tipos.some((t) => t.codigo !== excluirCodigo && mismoNombreTipo(t.nombre, nombre));
+  }
+
+  async crear(tipo: TipoCarga, cambio: CambioTipoCarga): Promise<void> {
+    if (this.tipos.some((t) => t.codigo === tipo.codigo)) {
+      throw new DomainError("CONFLICTO", `Ya existe un tipo de carga con el código ${tipo.codigo}`);
+    }
+    if (await this.existeNombre(tipo.nombre)) throw new DomainError("CONFLICTO", `Ya existe un tipo de carga llamado ${tipo.nombre}`);
+    this.tipos.push(copiaTipo(tipo));
+    this.historial.push(copiaCambio(cambio));
+  }
+
+  async actualizar(tipos: TipoCarga[], cambios: CambioTipoCarga[]): Promise<void> {
+    const nuevos = new Map(tipos.map((t) => [t.codigo, t]));
+    const resultado = this.tipos.map((t) => nuevos.get(t.codigo) ?? t);
+    for (const t of tipos) {
+      if (!this.tipos.some((x) => x.codigo === t.codigo)) throw new DomainError("NO_ENCONTRADO", `No existe el tipo de carga ${t.codigo}`);
+      if (resultado.some((x) => x.codigo !== t.codigo && mismoNombreTipo(x.nombre, t.nombre))) {
+        throw new DomainError("CONFLICTO", `Ya existe un tipo de carga llamado ${t.nombre}`);
+      }
+    }
+    exigirAlgunoActivo(resultado);
+    this.tipos = resultado.map(copiaTipo);
+    this.historial.push(...cambios.map(copiaCambio));
+  }
+
+  async eliminar(codigo: TipoCargaCodigo, cambio: CambioTipoCarga): Promise<void> {
+    if (await this.opciones.usaTipoCarga?.(codigo)) {
+      throw new DomainError("CONFLICTO", "El tipo de carga se usa en envíos registrados; desactívelo");
+    }
+    const resto = this.tipos.filter((t) => t.codigo !== codigo);
+    exigirAlgunoActivo(resto);
+    this.tipos = resto;
+    this.historial.push(copiaCambio(cambio));
+  }
+
+  async listarHistorial(
+    filtro: { codigo?: TipoCargaCodigo },
+    { pagina, porPagina }: Paginacion,
+  ): Promise<{ cambios: CambioTipoCarga[]; total: number }> {
+    // Más recientes primero; a igual fecha, el registrado después (orden de inserción).
+    const filtrados = this.historial
+      .map((c, i) => ({ c, i }))
+      .filter(({ c }) => !filtro.codigo || c.codigo === filtro.codigo)
+      .sort((a, b) => b.c.fecha.getTime() - a.c.fecha.getTime() || b.i - a.i)
+      .map(({ c }) => c);
+    const desde = (pagina - 1) * porPagina;
+    return { cambios: filtrados.slice(desde, desde + porPagina).map(copiaCambio), total: filtrados.length };
+  }
+}
+
+const copiaArticulo = (a: ArticuloRestringido): ArticuloRestringido => ({ ...a, actualizadoEn: new Date(a.actualizadoEn) });
+
+export class InMemoryArticuloRestringidoRepository implements ArticuloRestringidoRepository {
+  private articulos: ArticuloRestringido[];
+
+  constructor(semilla: readonly ArticuloRestringido[] = ARTICULOS_SEED) {
+    this.articulos = semilla.map(copiaArticulo);
+  }
+
+  async listar(filtro: { activos?: boolean } = {}): Promise<ArticuloRestringido[]> {
+    return this.articulos.filter((a) => !filtro.activos || a.activo).sort(compararArticulos).map(copiaArticulo);
+  }
+
+  async buscarPorId(id: string): Promise<ArticuloRestringido | null> {
+    const a = this.articulos.find((x) => x.id === id);
+    return a ? copiaArticulo(a) : null;
+  }
+
+  async crear(articulo: ArticuloRestringido): Promise<void> {
+    this.articulos.push(copiaArticulo(articulo));
+  }
+
+  async actualizar(articulos: ArticuloRestringido[]): Promise<void> {
+    const nuevos = new Map(articulos.map((a) => [a.id, a]));
+    this.articulos = this.articulos.map((a) => copiaArticulo(nuevos.get(a.id) ?? a));
+  }
+
+  async eliminar(id: string): Promise<void> {
+    this.articulos = this.articulos.filter((a) => a.id !== id);
   }
 }
 
@@ -247,6 +356,10 @@ export class InMemoryEnvioRepository implements EnvioRepository {
 
   async existeNumeroGuia(numeroGuia: number): Promise<boolean> {
     return [...this.datos.values()].some((x) => x.numeroGuia === numeroGuia);
+  }
+
+  async usaTipoCarga(codigo: TipoCargaCodigo): Promise<boolean> {
+    return [...this.datos.values()].some((x) => x.items.some((i) => i.tipoCarga === codigo));
   }
 
   async siguienteNumeroGuia(): Promise<number> {

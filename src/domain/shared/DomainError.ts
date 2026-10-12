@@ -23,7 +23,9 @@ export type ErrorCode =
   /** Ciudad de destino desconocida o sin ruta operativa desde la ciudad de origen de la integración. */
   | "RUTA_NO_DISPONIBLE"
   /** Falta configuración del servidor para la operación (p. ej. la clave de cifrado de los webhooks). */
-  | "SERVICIO_NO_CONFIGURADO";
+  | "SERVICIO_NO_CONFIGURADO"
+  /** Tipo de carga desactivado por el ADMIN: no se puede cotizar ni usar en envíos nuevos (v11). */
+  | "TIPO_CARGA_INACTIVO";
 
 export interface OpcionesDomainError {
   /**

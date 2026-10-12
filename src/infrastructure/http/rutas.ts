@@ -25,6 +25,15 @@ import {
   idUuid,
   loginSchema,
   paginacionSchema,
+  actualizarArticuloSchema,
+  actualizarTipoCargaSchema,
+  crearArticuloSchema,
+  crearTipoCargaSchema,
+  filtroHistorialTiposSchema,
+  listarTiposCargaSchema,
+  ordenArticulosSchema,
+  ordenTiposCargaSchema,
+  codigoTipoCargaSchema,
 } from "./esquemas.js";
 import { actorDe, autenticar } from "./middlewares/auth.js";
 import { limitarTasa, REGLAS } from "./middlewares/limitarTasa.js";
@@ -60,6 +69,11 @@ export function crearRouter(c: CasosDeUso, opciones: OpcionesRouter = {}): Route
 
   publico.post("/publico/cotizar", async (req, res) => {
     res.json(await c.cotizar.ejecutar(cotizacionSchema.parse(req.body)));
+  });
+
+  // «Qué no transportamos» (v11): solo los activos, por categoría y orden.
+  publico.get("/publico/articulos-restringidos", async (_req, res) => {
+    res.json(await c.articulosPublicos.ejecutar());
   });
 
   privado.use(autenticar(c.tokens));
@@ -101,8 +115,64 @@ export function crearRouter(c: CasosDeUso, opciones: OpcionesRouter = {}): Route
     res.status(204).end();
   });
 
-  privado.get("/tipos-carga", async (_req, res) => {
-    res.json(await c.listarTiposCarga.ejecutar());
+  // ── Tipos de carga (v11): lectura para todos (solo activos); `?todos=true` y la administración, solo ADMIN ──
+  privado.get("/tipos-carga", async (req, res) => {
+    const { todos } = listarTiposCargaSchema.parse(req.query);
+    res.json(await c.listarTiposCarga.ejecutar(actorDe(res), { todos }));
+  });
+
+  privado.post("/tipos-carga", async (req, res) => {
+    res.status(201).json(await c.crearTipoCarga.ejecutar(actorDe(res), crearTipoCargaSchema.parse(req.body)));
+  });
+
+  // Rutas fijas antes de las que llevan :codigo.
+  privado.put("/tipos-carga/orden", async (req, res) => {
+    const { codigos } = ordenTiposCargaSchema.parse(req.body);
+    res.json(await c.reordenarTiposCarga.ejecutar(actorDe(res), codigos));
+  });
+
+  privado.get("/tipos-carga/historial", async (req, res) => {
+    res.json(
+      await c.historialTiposCarga.ejecutar(
+        actorDe(res),
+        filtroHistorialTiposSchema.parse(req.query),
+        paginacionSchema.parse(req.query),
+      ),
+    );
+  });
+
+  privado.patch("/tipos-carga/:codigo", async (req, res) => {
+    const codigo = codigoTipoCargaSchema.parse(req.params.codigo);
+    res.json(await c.actualizarTipoCarga.ejecutar(actorDe(res), codigo, actualizarTipoCargaSchema.parse(req.body)));
+  });
+
+  privado.delete("/tipos-carga/:codigo", async (req, res) => {
+    await c.eliminarTipoCarga.ejecutar(actorDe(res), codigoTipoCargaSchema.parse(req.params.codigo));
+    res.status(204).end();
+  });
+
+  // ── Artículos restringidos (v11, ADMIN) ──
+  privado.get("/articulos-restringidos", async (_req, res) => {
+    res.json(await c.listarArticulos.ejecutar(actorDe(res)));
+  });
+
+  privado.post("/articulos-restringidos", async (req, res) => {
+    res.status(201).json(await c.crearArticulo.ejecutar(actorDe(res), crearArticuloSchema.parse(req.body)));
+  });
+
+  privado.put("/articulos-restringidos/orden", async (req, res) => {
+    const { categoria, ids } = ordenArticulosSchema.parse(req.body);
+    res.json(await c.reordenarArticulos.ejecutar(actorDe(res), categoria, ids));
+  });
+
+  privado.patch("/articulos-restringidos/:id", async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    res.json(await c.actualizarArticulo.ejecutar(actorDe(res), id, actualizarArticuloSchema.parse(req.body)));
+  });
+
+  privado.delete("/articulos-restringidos/:id", async (req, res) => {
+    await c.eliminarArticulo.ejecutar(actorDe(res), idUuid.parse(req.params.id));
+    res.status(204).end();
   });
 
   privado.get("/rutas", async (req, res) => {

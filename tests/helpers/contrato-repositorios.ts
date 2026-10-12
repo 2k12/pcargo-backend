@@ -6,7 +6,10 @@ import type {
   RutaRepository,
   TipoCargaRepository,
   UsuarioRepository,
+  ArticuloRestringidoRepository,
 } from "../../src/application/ports/repositories.js";
+import type { CambioTipoCarga, TipoCarga } from "../../src/domain/carga/TipoCarga.js";
+import type { ArticuloRestringido } from "../../src/domain/catalogo/ArticuloRestringido.js";
 import type {
   EntregaWebhookRepository,
   IdempotenciaRepository,
@@ -16,7 +19,7 @@ import type {
 import type { Integracion } from "../../src/domain/integracion/Integracion.js";
 import type { EntregaWebhook } from "../../src/domain/integracion/Webhook.js";
 import { Envio } from "../../src/domain/envio/Envio.js";
-import { TIPOS_CARGA_SEED, USUARIOS_SEED } from "../../src/infrastructure/persistence/seed-data.js";
+import { ARTICULOS_SEED, TIPOS_CARGA_SEED, USUARIOS_SEED } from "../../src/infrastructure/persistence/seed-data.js";
 import { ADMIN, OPERADOR, solicitudEnvio } from "./fakes.js";
 
 export interface FabricaRepos {
@@ -24,7 +27,10 @@ export interface FabricaRepos {
   rutas: RutaRepository;
   ciudades: CiudadRepository;
   clientes: ClienteRepository;
+  /** Con los 7 tipos semilla en su estado original y sin historial. */
   tiposCarga: TipoCargaRepository;
+  /** Con la semilla de artículos restringidos. */
+  articulos: ArticuloRestringidoRepository;
   /** Con los usuarios semilla en su estado original (nombre, correo y contraseña). */
   usuarios: UsuarioRepository;
   integraciones: IntegracionRepository;
@@ -285,6 +291,10 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
         precioRural: 1.5,
         mayoreo: { minimoExclusivo: 50, precio: 1 },
         pesoMaxKg: 50,
+        activo: true,
+        orden: 5,
+        actualizadoEn: null,
+        actualizadoPor: null,
       });
       expect(await repos.tiposCarga.buscarPorCodigo("CARTON")).toMatchObject({ precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 35 });
     });
@@ -638,6 +648,154 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
 
       expect(await repos.idempotencia.purgarAnteriores(new Date(t2.getTime() + 1))).toBe(2);
       expect(await repos.idempotencia.reservar(clave, "h5", t2, lim(t2))).toEqual({ tipo: "nueva" });
+    });
+
+    // ── Catálogo configurable (v11) ──────────────────────────────────────────
+
+    const tipoNuevo = (sobre: Partial<TipoCarga> = {}): TipoCarga => ({
+      codigo: "CAJA_GRANDE",
+      nombre: "Caja grande",
+      precio: 5.5,
+      precioRural: 6.25,
+      mayoreo: { minimoExclusivo: 10, precio: 4.75 },
+      pesoMaxKg: 40,
+      activo: true,
+      orden: 8,
+      actualizadoEn: new Date(Date.UTC(2026, 9, 12, 15)),
+      actualizadoPor: ADMIN.nombre,
+      ...sobre,
+    });
+    let nCambio = 0;
+    const cambioDe = (codigo: string, accion: CambioTipoCarga["accion"], minutos: number, cambios: CambioTipoCarga["cambios"] = []): CambioTipoCarga => ({
+      id: `00000000-0000-4000-9000-${String(++nCambio).padStart(12, "0")}`,
+      codigo,
+      fecha: new Date(Date.UTC(2026, 9, 12, 15, minutos)),
+      usuarioId: ADMIN.id,
+      usuario: ADMIN.nombre,
+      accion,
+      cambios,
+    });
+
+    it("tipos de carga: alta, búsqueda, nombre único sin mayúsculas y filtro de activos", async () => {
+      await repos.tiposCarga.crear(tipoNuevo(), cambioDe("CAJA_GRANDE", "CREADO", 0, [{ campo: "precio", antes: null, despues: 5.5 }]));
+      expect(await repos.tiposCarga.buscarPorCodigo("CAJA_GRANDE")).toEqual(tipoNuevo());
+      expect((await repos.tiposCarga.listar()).map((t) => t.codigo).at(-1)).toBe("CAJA_GRANDE");
+      expect(await repos.tiposCarga.existeNombre("CAJA GRANDE")).toBe(true);
+      expect(await repos.tiposCarga.existeNombre("caja grande", "CAJA_GRANDE")).toBe(false);
+      await expect(repos.tiposCarga.crear(tipoNuevo({ nombre: "Otra" }), cambioDe("CAJA_GRANDE", "CREADO", 1))).rejects.toMatchObject({ code: "CONFLICTO" });
+      await expect(repos.tiposCarga.crear(tipoNuevo({ codigo: "OTRA", nombre: "caja GRANDE" }), cambioDe("OTRA", "CREADO", 1))).rejects.toMatchObject({ code: "CONFLICTO" });
+
+      await repos.tiposCarga.actualizar([{ ...TIPOS_CARGA_SEED[3]!, activo: false }], [cambioDe("VALIJA", "DESACTIVADO", 2)]);
+      const activos = (await repos.tiposCarga.listar({ activos: true })).map((t) => t.codigo);
+      expect(activos).not.toContain("VALIJA");
+      expect(activos).toContain("CAJA_GRANDE");
+      expect((await repos.tiposCarga.listar()).map((t) => t.codigo)).toContain("VALIJA");
+    });
+
+    it("tipos de carga: actualizar en bloque guarda el historial (recientes primero, filtro por código y páginas)", async () => {
+      const [sobre, paquete] = [TIPOS_CARGA_SEED[0]!, TIPOS_CARGA_SEED[1]!];
+      const t = new Date(Date.UTC(2026, 9, 12, 16));
+      await repos.tiposCarga.actualizar(
+        [{ ...sobre, precio: 3.5, actualizadoEn: t, actualizadoPor: ADMIN.nombre }],
+        [cambioDe("SOBRE", "MODIFICADO", 5, [{ campo: "precio", antes: 3, despues: 3.5 }])],
+      );
+      // reordenamiento: varios tipos y cambios con la misma fecha
+      await repos.tiposCarga.actualizar(
+        [{ ...paquete, orden: 1 }, { ...sobre, precio: 3.5, orden: 2, actualizadoEn: t, actualizadoPor: ADMIN.nombre }],
+        [
+          cambioDe("PAQUETE", "MODIFICADO", 6, [{ campo: "orden", antes: 2, despues: 1 }]),
+          cambioDe("SOBRE", "MODIFICADO", 6, [{ campo: "orden", antes: 1, despues: 2 }]),
+        ],
+      );
+      expect(await repos.tiposCarga.buscarPorCodigo("SOBRE")).toMatchObject({ precio: 3.5, orden: 2, actualizadoEn: t, actualizadoPor: ADMIN.nombre });
+      expect((await repos.tiposCarga.listar()).slice(0, 2).map((x) => x.codigo)).toEqual(["PAQUETE", "SOBRE"]);
+
+      const todo = await repos.tiposCarga.listarHistorial({}, { pagina: 1, porPagina: 10 });
+      expect(todo.total).toBe(3);
+      // a igual fecha, el último registrado primero
+      expect(todo.cambios.map((c) => [c.codigo, c.cambios[0]!.campo])).toEqual([
+        ["SOBRE", "orden"],
+        ["PAQUETE", "orden"],
+        ["SOBRE", "precio"],
+      ]);
+      expect(todo.cambios[2]).toEqual({
+        id: expect.any(String),
+        codigo: "SOBRE",
+        fecha: new Date(Date.UTC(2026, 9, 12, 15, 5)),
+        usuarioId: ADMIN.id,
+        usuario: ADMIN.nombre,
+        accion: "MODIFICADO",
+        cambios: [{ campo: "precio", antes: 3, despues: 3.5 }],
+      });
+      const sobreSolo = await repos.tiposCarga.listarHistorial({ codigo: "SOBRE" }, { pagina: 2, porPagina: 1 });
+      expect(sobreSolo.total).toBe(2);
+      expect(sobreSolo.cambios.map((c) => c.cambios[0]!.campo)).toEqual(["precio"]);
+    });
+
+    it("tipos de carga: nunca queda el catálogo sin tipos activos (no guarda nada)", async () => {
+      const todos = await repos.tiposCarga.listar();
+      await expect(
+        repos.tiposCarga.actualizar(todos.map((t) => ({ ...t, activo: false })), todos.map((t, i) => cambioDe(t.codigo, "DESACTIVADO", i))),
+      ).rejects.toMatchObject({ code: "CONFLICTO" });
+      expect(await repos.tiposCarga.listar({ activos: true })).toHaveLength(7);
+      expect((await repos.tiposCarga.listarHistorial({}, { pagina: 1, porPagina: 50 })).total).toBe(0);
+      // con un solo activo, eliminarlo tampoco se admite
+      const resto = todos.filter((t) => t.codigo !== "SOBRE").map((t) => ({ ...t, activo: false }));
+      await repos.tiposCarga.actualizar(resto, resto.map((t, i) => cambioDe(t.codigo, "DESACTIVADO", i)));
+      await expect(repos.tiposCarga.eliminar("SOBRE", cambioDe("SOBRE", "ELIMINADO", 30))).rejects.toMatchObject({ code: "CONFLICTO" });
+      expect(await repos.tiposCarga.buscarPorCodigo("SOBRE")).not.toBeNull();
+    });
+
+    it("tipos de carga: no se elimina uno usado en envíos; uno sin envíos sí (el historial se conserva)", async () => {
+      await repos.tiposCarga.crear(tipoNuevo(), cambioDe("CAJA_GRANDE", "CREADO", 0));
+      await repos.envios.guardar(nuevoEnvio()); // PAQUETE y CARTON
+      expect(await repos.envios.usaTipoCarga("PAQUETE")).toBe(true);
+      expect(await repos.envios.usaTipoCarga("CAJA_GRANDE")).toBe(false);
+      await expect(repos.tiposCarga.eliminar("PAQUETE", cambioDe("PAQUETE", "ELIMINADO", 1))).rejects.toMatchObject({ code: "CONFLICTO" });
+      expect(await repos.tiposCarga.buscarPorCodigo("PAQUETE")).not.toBeNull();
+
+      await repos.tiposCarga.eliminar("CAJA_GRANDE", cambioDe("CAJA_GRANDE", "ELIMINADO", 2));
+      expect(await repos.tiposCarga.buscarPorCodigo("CAJA_GRANDE")).toBeNull();
+      const h = await repos.tiposCarga.listarHistorial({ codigo: "CAJA_GRANDE" }, { pagina: 1, porPagina: 10 });
+      expect(h.cambios.map((c) => c.accion)).toEqual(["ELIMINADO", "CREADO"]);
+    });
+
+    it("artículos restringidos: semilla (9 prohibidos, 3 condicionados, 2 notas) ordenada por categoría y orden", async () => {
+      const todos = await repos.articulos.listar();
+      expect(todos).toEqual(ARTICULOS_SEED);
+      expect(todos.map((a) => a.categoria)).toEqual([...Array(9).fill("PROHIBIDO"), ...Array(3).fill("CONDICIONADO"), "NOTA", "NOTA"]);
+    });
+
+    it("artículos restringidos: crear, actualizar en bloque, filtrar activos y eliminar", async () => {
+      const ahora = new Date(Date.UTC(2026, 9, 12, 17));
+      const nuevo: ArticuloRestringido = {
+        id: "00000000-0000-4000-8011-000000000099",
+        categoria: "PROHIBIDO",
+        titulo: "Baterías de litio sueltas",
+        detalle: "",
+        icono: "bateria",
+        activo: true,
+        orden: 0, // primero de su categoría
+        actualizadoEn: ahora,
+        actualizadoPor: ADMIN.nombre,
+      };
+      await repos.articulos.crear(nuevo);
+      expect(await repos.articulos.buscarPorId(nuevo.id)).toEqual(nuevo);
+      expect((await repos.articulos.listar())[0]!.id).toBe(nuevo.id);
+
+      const dinero = ARTICULOS_SEED[0]!;
+      await repos.articulos.actualizar([
+        { ...nuevo, categoria: "CONDICIONADO", orden: 9 },
+        { ...dinero, activo: false, actualizadoEn: ahora, actualizadoPor: ADMIN.nombre },
+      ]);
+      const activos = await repos.articulos.listar({ activos: true });
+      expect(activos.map((a) => a.id)).not.toContain(dinero.id);
+      expect(activos.filter((a) => a.categoria === "CONDICIONADO").at(-1)?.id).toBe(nuevo.id);
+      expect(await repos.articulos.buscarPorId(dinero.id)).toMatchObject({ activo: false, actualizadoPor: ADMIN.nombre });
+
+      await repos.articulos.eliminar(nuevo.id);
+      expect(await repos.articulos.buscarPorId(nuevo.id)).toBeNull();
+      expect(await repos.articulos.listar()).toHaveLength(14);
     });
   });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TIPOS_CARGA, validarPeso, type TipoCarga } from "../../../src/domain/carga/TipoCarga.js";
+import { validarPeso, type TipoCarga } from "../../../src/domain/carga/TipoCarga.js";
 import { DomainError } from "../../../src/domain/shared/DomainError.js";
 import { calcularPrecioUnitario, cotizarItems } from "../../../src/domain/tarifa/calcularTarifa.js";
 import { esZona } from "../../../src/domain/tarifa/Zona.js";
@@ -9,8 +9,10 @@ const tipo = (codigo: string): TipoCarga => TIPOS_CARGA_SEED.find((t) => t.codig
 const linea = (codigo: string, cantidad: number, pesoKg = 1) => ({ tipo: tipo(codigo), cantidad, pesoKg });
 
 describe("catálogo de tipos de carga (v8)", () => {
-  it("la semilla tiene los 7 tipos del dominio, en orden", () => {
-    expect(TIPOS_CARGA_SEED.map((t) => t.codigo)).toEqual([...TIPOS_CARGA]);
+  it("la semilla tiene los 7 tipos de v8, activos y en orden", () => {
+    expect(TIPOS_CARGA_SEED.map((t) => t.codigo)).toEqual(["SOBRE", "PAQUETE", "CARTON", "VALIJA", "TELA", "PLUMON_PEQUENO", "PLUMON_GRANDE"]);
+    expect(TIPOS_CARGA_SEED.map((t) => t.orden)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(TIPOS_CARGA_SEED.every((t) => t.activo && t.actualizadoEn === null && t.actualizadoPor === null)).toBe(true);
   });
 
   it.each([

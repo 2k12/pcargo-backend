@@ -22,6 +22,7 @@ const STATUS: Record<ErrorCode, number> = {
   IDEMPOTENCIA_EN_PROCESO: 409,
   RUTA_NO_DISPONIBLE: 422,
   SERVICIO_NO_CONFIGURADO: 503,
+  TIPO_CARGA_INACTIVO: 422,
 };
 
 export interface RespuestaError {

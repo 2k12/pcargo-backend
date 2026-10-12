@@ -12,7 +12,7 @@ import type {
   TipoCargaRepository,
   UsuarioRepository,
 } from "../../../application/ports/repositories.js";
-import type { TipoCarga, TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
+import type { AccionTipoCarga, CambioCampo, CambioTipoCarga, TipoCarga, TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
 import { Envio, type EventoHistorial, type ItemEnvio } from "../../../domain/envio/Envio.js";
 import type { EstadoEnvio } from "../../../domain/envio/EstadoEnvio.js";
 import type { EvidenciaEntrega, TipoImagen } from "../../../domain/envio/Evidencia.js";
@@ -22,6 +22,7 @@ import type { Zona } from "../../../domain/tarifa/Zona.js";
 import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import { insertarEntregas } from "./PgIntegraciones.js";
+import type pg from "pg";
 import type { Db } from "./pool.js";
 
 export class PgUsuarioRepository implements UsuarioRepository {
@@ -140,6 +141,10 @@ interface TipoCargaRow {
   mayoreo_minimo_exclusivo: number | null;
   mayoreo_precio: number | null;
   peso_max_kg: number;
+  activo: boolean;
+  orden: number;
+  actualizado_en: Date | null;
+  actualizado_por: string | null;
 }
 
 const aTipoCarga = (r: TipoCargaRow): TipoCarga => ({
@@ -152,22 +157,175 @@ const aTipoCarga = (r: TipoCargaRow): TipoCarga => ({
       ? null
       : { minimoExclusivo: r.mayoreo_minimo_exclusivo, precio: r.mayoreo_precio },
   pesoMaxKg: r.peso_max_kg,
+  activo: r.activo,
+  orden: r.orden,
+  actualizadoEn: r.actualizado_en,
+  actualizadoPor: r.actualizado_por,
 });
+
+interface CambioTipoCargaRow {
+  id: string;
+  codigo: string;
+  fecha: Date;
+  usuario_id: string | null;
+  usuario_nombre: string | null;
+  accion: AccionTipoCarga;
+  cambios: CambioCampo[];
+}
+
+const codigoPg = (e: unknown): string | undefined => (e as { code?: string } | null)?.code;
+
+/** Ejecuta `fn` en una transacción (BEGIN/COMMIT; ROLLBACK si lanza). */
+export async function enTransaccion<T>(db: Db, fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await fn(client);
+    await client.query("COMMIT");
+    return r;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function insertarCambios(client: pg.PoolClient, cambios: CambioTipoCarga[]): Promise<void> {
+  for (const c of cambios) {
+    await client.query(
+      `INSERT INTO tipos_carga_historial (id, codigo, fecha, usuario_id, usuario_nombre, accion, cambios)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+      [c.id, c.codigo, c.fecha, c.usuarioId, c.usuario, c.accion, JSON.stringify(c.cambios)],
+    );
+  }
+}
+
+/**
+ * Bloquea las filas de los tipos activos: dos administradores que desactivan (o eliminan) tipos distintos a la vez
+ * se serializan y el segundo ve el resultado del primero, así el catálogo nunca queda sin tipos activos.
+ */
+async function bloquearActivos(client: pg.PoolClient): Promise<void> {
+  await client.query("SELECT codigo FROM tipos_carga WHERE activo FOR UPDATE");
+}
+
+async function exigirAlgunoActivoPg(client: pg.PoolClient): Promise<void> {
+  const { rows } = await client.query<{ n: number }>("SELECT count(*)::int AS n FROM tipos_carga WHERE activo");
+  if (rows[0]!.n === 0) throw new DomainError("CONFLICTO", "Debe quedar al menos un tipo de carga activo");
+}
 
 export class PgTipoCargaRepository implements TipoCargaRepository {
   private static readonly SELECT = `SELECT codigo, nombre, precio, precio_rural, mayoreo_minimo_exclusivo,
-    mayoreo_precio, peso_max_kg FROM tipos_carga`;
+    mayoreo_precio, peso_max_kg, activo, orden, actualizado_en, actualizado_por FROM tipos_carga`;
 
   constructor(private readonly db: Db) {}
 
-  async listar(): Promise<TipoCarga[]> {
-    const { rows } = await this.db.query<TipoCargaRow>(`${PgTipoCargaRepository.SELECT} ORDER BY orden, codigo`);
+  async listar(filtro: { activos?: boolean } = {}): Promise<TipoCarga[]> {
+    const where = filtro.activos ? "WHERE activo" : "";
+    const { rows } = await this.db.query<TipoCargaRow>(`${PgTipoCargaRepository.SELECT} ${where} ORDER BY orden, codigo`);
     return rows.map(aTipoCarga);
   }
 
   async buscarPorCodigo(codigo: TipoCargaCodigo): Promise<TipoCarga | null> {
     const { rows } = await this.db.query<TipoCargaRow>(`${PgTipoCargaRepository.SELECT} WHERE codigo = $1`, [codigo]);
     return rows[0] ? aTipoCarga(rows[0]) : null;
+  }
+
+  async existeNombre(nombre: string, excluirCodigo?: TipoCargaCodigo): Promise<boolean> {
+    const { rowCount } = await this.db.query(
+      "SELECT 1 FROM tipos_carga WHERE lower(nombre) = lower($1) AND codigo IS DISTINCT FROM $2",
+      [nombre, excluirCodigo ?? null],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async crear(t: TipoCarga, cambio: CambioTipoCarga): Promise<void> {
+    try {
+      await enTransaccion(this.db, async (client) => {
+        await client.query(
+          `INSERT INTO tipos_carga (codigo, nombre, precio, precio_rural, mayoreo_minimo_exclusivo, mayoreo_precio,
+             peso_max_kg, activo, orden, actualizado_en, actualizado_por)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [
+            t.codigo, t.nombre, t.precio, t.precioRural, t.mayoreo?.minimoExclusivo ?? null, t.mayoreo?.precio ?? null,
+            t.pesoMaxKg, t.activo, t.orden, t.actualizadoEn, t.actualizadoPor,
+          ],
+        );
+        await insertarCambios(client, [cambio]);
+      });
+    } catch (e) {
+      // Carrera entre dos altas con el mismo código o nombre: deciden la PK y el índice único.
+      if (codigoPg(e) === "23505") throw new DomainError("CONFLICTO", "Ya existe un tipo de carga con ese código o nombre");
+      throw e;
+    }
+  }
+
+  async actualizar(tipos: TipoCarga[], cambios: CambioTipoCarga[]): Promise<void> {
+    try {
+      await enTransaccion(this.db, async (client) => {
+        await bloquearActivos(client);
+        for (const t of tipos) {
+          const { rowCount } = await client.query(
+            `UPDATE tipos_carga SET nombre = $2, precio = $3, precio_rural = $4, mayoreo_minimo_exclusivo = $5,
+               mayoreo_precio = $6, peso_max_kg = $7, activo = $8, orden = $9, actualizado_en = $10, actualizado_por = $11
+             WHERE codigo = $1`,
+            [
+              t.codigo, t.nombre, t.precio, t.precioRural, t.mayoreo?.minimoExclusivo ?? null, t.mayoreo?.precio ?? null,
+              t.pesoMaxKg, t.activo, t.orden, t.actualizadoEn, t.actualizadoPor,
+            ],
+          );
+          if (!rowCount) throw new DomainError("NO_ENCONTRADO", `No existe el tipo de carga ${t.codigo}`);
+        }
+        await exigirAlgunoActivoPg(client);
+        await insertarCambios(client, cambios);
+      });
+    } catch (e) {
+      if (codigoPg(e) === "23505") throw new DomainError("CONFLICTO", "Ya existe un tipo de carga con ese nombre");
+      throw e;
+    }
+  }
+
+  async eliminar(codigo: TipoCargaCodigo, cambio: CambioTipoCarga): Promise<void> {
+    try {
+      await enTransaccion(this.db, async (client) => {
+        await bloquearActivos(client);
+        await client.query("DELETE FROM tipos_carga WHERE codigo = $1", [codigo]);
+        await exigirAlgunoActivoPg(client);
+        await insertarCambios(client, [cambio]);
+      });
+    } catch (e) {
+      // Un envío registrado entre la comprobación y el borrado: la FK de envio_items lo impide.
+      if (codigoPg(e) === "23503") {
+        throw new DomainError("CONFLICTO", "El tipo de carga se usa en envíos registrados; desactívelo");
+      }
+      throw e;
+    }
+  }
+
+  async listarHistorial(
+    filtro: { codigo?: TipoCargaCodigo },
+    { pagina, porPagina }: Paginacion,
+  ): Promise<{ cambios: CambioTipoCarga[]; total: number }> {
+    const where = filtro.codigo ? "WHERE codigo = $1" : "";
+    const params: unknown[] = filtro.codigo ? [filtro.codigo] : [];
+    const total = await this.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM tipos_carga_historial ${where}`, params);
+    const { rows } = await this.db.query<CambioTipoCargaRow>(
+      `SELECT id, codigo, fecha, usuario_id, usuario_nombre, accion, cambios FROM tipos_carga_historial ${where}
+        ORDER BY fecha DESC, secuencia DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, porPagina, (pagina - 1) * porPagina],
+    );
+    return {
+      total: total.rows[0]!.n,
+      cambios: rows.map((r) => ({
+        id: r.id,
+        codigo: r.codigo,
+        fecha: r.fecha,
+        usuarioId: r.usuario_id,
+        usuario: r.usuario_nombre,
+        accion: r.accion,
+        cambios: r.cambios,
+      })),
+    };
   }
 }
 
@@ -403,6 +561,11 @@ export class PgEnvioRepository implements EnvioRepository {
 
   async existeNumeroGuia(numeroGuia: number): Promise<boolean> {
     const { rowCount } = await this.db.query("SELECT 1 FROM envios WHERE numero_guia = $1", [numeroGuia]);
+    return (rowCount ?? 0) > 0;
+  }
+
+  async usaTipoCarga(codigo: TipoCargaCodigo): Promise<boolean> {
+    const { rowCount } = await this.db.query("SELECT 1 FROM envio_items WHERE tipo_carga = $1 LIMIT 1", [codigo]);
     return (rowCount ?? 0) > 0;
   }
 

@@ -1,4 +1,4 @@
-import { esTipoCarga, type TipoCarga } from "../../../domain/carga/TipoCarga.js";
+import { exigirTipoUsable, type TipoCarga } from "../../../domain/carga/TipoCarga.js";
 import { esOperativa, type Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import { cotizarItems, type Cotizacion } from "../../../domain/tarifa/calcularTarifa.js";
@@ -39,12 +39,13 @@ export class CotizarEnvio {
       throw new DomainError("RUTA_INACTIVA", "La ruta seleccionada (o una de sus ciudades) no está operativa");
     }
 
+    // Catálogo vigente (v11, configurable): código inexistente → 422 VALIDACION; inactivo → 422 TIPO_CARGA_INACTIVO.
     const catalogo = new Map<string, TipoCarga>((await this.tipos.listar()).map((t) => [t.codigo, t]));
-    const items = s.items.map((i) => {
-      const tipo = esTipoCarga(i.tipoCarga) ? catalogo.get(i.tipoCarga) : undefined;
-      if (!tipo) throw new DomainError("VALIDACION", `Tipo de carga desconocido: ${i.tipoCarga}`);
-      return { tipo, cantidad: i.cantidad, pesoKg: i.pesoKg };
-    });
+    const items = s.items.map((i) => ({
+      tipo: exigirTipoUsable(catalogo.get(i.tipoCarga), i.tipoCarga),
+      cantidad: i.cantidad,
+      pesoKg: i.pesoKg,
+    }));
     // La ruta solo determina el trayecto: el precio depende del tipo de carga y la zona.
     return { ruta, cotizacion: cotizarItems(items, zona) };
   }

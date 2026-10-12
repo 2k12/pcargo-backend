@@ -1,4 +1,4 @@
-import { validarPeso, type TipoCarga, type TipoCargaCodigo } from "../carga/TipoCarga.js";
+import { validarPeso, type TipoCargaCodigo, type TipoCargaPublico } from "../carga/TipoCarga.js";
 import { DomainError, redondear2 } from "../shared/DomainError.js";
 import { ZONA_POR_DEFECTO, type Zona } from "./Zona.js";
 
@@ -20,7 +20,7 @@ export interface PrecioUnitario {
  *    cuesta `mayoreo.precio` sin importar la zona.
  * 2. Si no, en zona RURAL usa `precioRural` cuando existe; en otro caso `precio`.
  */
-export function calcularPrecioUnitario(tipo: TipoCarga, zona: Zona, unidadesDelTipo: number): PrecioUnitario {
+export function calcularPrecioUnitario(tipo: TipoCargaPublico, zona: Zona, unidadesDelTipo: number): PrecioUnitario {
   if (tipo.mayoreo && unidadesDelTipo > tipo.mayoreo.minimoExclusivo) {
     return { costoUnitario: tipo.mayoreo.precio, mayoreo: true };
   }
@@ -29,7 +29,7 @@ export function calcularPrecioUnitario(tipo: TipoCarga, zona: Zona, unidadesDelT
 }
 
 export interface ItemACotizar {
-  tipo: TipoCarga;
+  tipo: TipoCargaPublico;
   cantidad: number;
   /** Peso por unidad. */
   pesoKg: number;

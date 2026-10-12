@@ -122,7 +122,7 @@ describe("RutaRepositoryEnCache", () => {
 
   it("las claves del catálogo llevan la versión del contrato (no se leen entradas de versiones anteriores)", () => {
     expect(claveCatalogo("publico")).toBe(`catalogo:${VERSION_CATALOGO}:publico`);
-    expect(VERSION_CATALOGO).toBe("v8");
+    expect(VERSION_CATALOGO).toBe("v11");
   });
 });
 

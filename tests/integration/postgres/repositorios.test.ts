@@ -4,9 +4,11 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrar } from "../../../src/infrastructure/persistence/postgres/migrar.js";
 import { sembrar } from "../../../src/infrastructure/persistence/postgres/sembrar.js";
-import { TIPOS_CARGA_SEED, USUARIOS_SEED } from "../../../src/infrastructure/persistence/seed-data.js";
+import { ARTICULOS_SEED, TIPOS_CARGA_SEED, USUARIOS_SEED } from "../../../src/infrastructure/persistence/seed-data.js";
+import { PgArticuloRestringidoRepository } from "../../../src/infrastructure/persistence/postgres/PgArticulosRestringidos.js";
 import {
   ciudadesSemilla,
+  InMemoryArticuloRestringidoRepository,
   InMemoryCiudadRepository,
   InMemoryEnvioRepository,
   InMemoryRutaRepository,
@@ -41,16 +43,18 @@ contratoRepositorios("memoria", async () => {
     solicitudesApi.eliminarDeIntegracion(id);
     idempotencia.eliminarDeIntegracion(id);
   });
+  const envios = new InMemoryEnvioRepository({ outbox: entregasWebhook, nombreIntegracion: integraciones.nombre });
   return {
     integraciones,
     entregasWebhook,
     solicitudesApi,
     idempotencia,
-    envios: new InMemoryEnvioRepository({ outbox: entregasWebhook, nombreIntegracion: integraciones.nombre }),
+    envios,
     rutas: new InMemoryRutaRepository(ciudades),
     ciudades: new InMemoryCiudadRepository(ciudades),
     clientes: new InMemoryClienteRepository(),
-    tiposCarga: new InMemoryTipoCargaRepository(),
+    tiposCarga: new InMemoryTipoCargaRepository(undefined, { usaTipoCarga: (c) => envios.usaTipoCarga(c) }),
+    articulos: new InMemoryArticuloRestringidoRepository(),
     usuarios: new InMemoryUsuarioRepository(
       USUARIOS_SEED.map(({ password, ...u }) => ({ ...u, passwordHash: `hash:${password}`, activo: true })),
     ),
@@ -62,12 +66,15 @@ const url = process.env.TEST_DATABASE_URL;
 // Requiere Postgres (docker compose up -d db). Usa una BD dedicada: ¡se borra en cada test!
 describe.skipIf(!url)("PostgreSQL", () => {
   let db: Db;
+  /** Artículos tal como los dejó la migración 011 (antes de que el contrato los reinicie). */
+  let articulosMigracion: unknown[];
 
   beforeAll(async () => {
     db = crearPool(url!);
     await db.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
     await migrar(db, () => {});
     await sembrar(db, 4);
+    articulosMigracion = (await new PgArticuloRestringidoRepository(db).listar()).map(({ actualizadoEn: _, ...a }) => a);
   });
 
   afterAll(async () => {
@@ -81,6 +88,17 @@ describe.skipIf(!url)("PostgreSQL", () => {
     await db.query("DELETE FROM rutas WHERE origen_id > 4 OR destino_id > 4");
     await db.query("DELETE FROM ciudades WHERE id > 4");
     await db.query("UPDATE ciudades SET activa = TRUE");
+    // Catálogo v11: los 7 tipos semilla tal cual, sin tipos extra ni historial, y los artículos de la semilla.
+    await db.query("TRUNCATE tipos_carga_historial, articulos_restringidos");
+    await db.query("DELETE FROM tipos_carga WHERE NOT (codigo = ANY($1))", [TIPOS_CARGA_SEED.map((t) => t.codigo)]);
+    for (const t of TIPOS_CARGA_SEED) {
+      await db.query(
+        `UPDATE tipos_carga SET nombre = $2, precio = $3, precio_rural = $4, mayoreo_minimo_exclusivo = $5, mayoreo_precio = $6,
+           peso_max_kg = $7, activo = $8, orden = $9, actualizado_en = NULL, actualizado_por = NULL WHERE codigo = $1`,
+        [t.codigo, t.nombre, t.precio, t.precioRural, t.mayoreo?.minimoExclusivo ?? null, t.mayoreo?.precio ?? null, t.pesoMaxKg, t.activo, t.orden],
+      );
+    }
+    for (const a of ARTICULOS_SEED) await new PgArticuloRestringidoRepository(db).crear(a);
     // Los tests de perfil cambian nombre, correo y hash: se restauran los de la semilla.
     for (const u of USUARIOS_SEED) {
       await db.query("UPDATE usuarios SET nombre = $2, email = $3, password_hash = $4 WHERE id = $1", [u.id, u.nombre, u.email, `hash:${u.password}`]);
@@ -91,12 +109,47 @@ describe.skipIf(!url)("PostgreSQL", () => {
       ciudades: new PgCiudadRepository(db),
       clientes: new PgClienteRepository(db),
       tiposCarga: new PgTipoCargaRepository(db),
+      articulos: new PgArticuloRestringidoRepository(db),
       usuarios: new PgUsuarioRepository(db),
       integraciones: new PgIntegracionRepository(db),
       entregasWebhook: new PgEntregaWebhookRepository(db),
       solicitudesApi: new PgSolicitudApiRepository(db),
       idempotencia: new PgIdempotenciaRepository(db),
     };
+  });
+
+  it("migración 011: siembra los artículos restringidos de la landing igual que ARTICULOS_SEED (modo memoria)", () => {
+    expect(articulosMigracion).toEqual(ARTICULOS_SEED.map(({ actualizadoEn: _, ...a }) => a));
+  });
+
+  it("migración 011: restricciones del catálogo (código, rangos, nota sin ícono, nombre único)", async () => {
+    const insertar = (codigo: string, nombre: string, precio = 3, mayoreo: [number, number] | null = null) =>
+      db.query(
+        `INSERT INTO tipos_carga (codigo, nombre, precio, peso_max_kg, mayoreo_minimo_exclusivo, mayoreo_precio) VALUES ($1, $2, $3, 10, $4, $5)`,
+        [codigo, nombre, precio, mayoreo?.[0] ?? null, mayoreo?.[1] ?? null],
+      );
+    await expect(insertar("caja", "Caja chica")).rejects.toMatchObject({ code: "23514" });
+    await expect(insertar("CAJA", "Caja chica", 1001)).rejects.toMatchObject({ code: "23514" });
+    await expect(insertar("CAJA", "Caja chica", 3, [10, 3])).rejects.toMatchObject({ code: "23514" });
+    await expect(insertar("CAJA", "SOBRE")).rejects.toMatchObject({ code: "23505" });
+    await expect(
+      db.query("UPDATE articulos_restringidos SET icono = 'alerta' WHERE categoria = 'NOTA'"),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      db.query("UPDATE articulos_restringidos SET icono = 'cohete' WHERE categoria = 'PROHIBIDO'"),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("db:seed no reactiva, sobrescribe ni vuelve a crear tipos que el ADMIN cambió o eliminó", async () => {
+    await db.query("TRUNCATE envios, envio_items, historial_estados CASCADE");
+    await db.query("UPDATE tipos_carga SET activo = FALSE, precio = 9.99 WHERE codigo = 'VALIJA'");
+    await db.query("DELETE FROM tipos_carga WHERE codigo = 'PLUMON_GRANDE'");
+    await db.query("DELETE FROM articulos_restringidos WHERE categoria = 'NOTA'");
+    await sembrar(db, 4);
+    const tipos = new PgTipoCargaRepository(db);
+    expect(await tipos.buscarPorCodigo("VALIJA")).toMatchObject({ activo: false, precio: 9.99 });
+    expect(await tipos.buscarPorCodigo("PLUMON_GRANDE")).toBeNull();
+    expect((await new PgArticuloRestringidoRepository(db).listar()).some((a) => a.categoria === "NOTA")).toBe(false);
   });
 
   it("migración 009: los envíos existentes quedan sin dirección ni evidencia, y las restricciones se cumplen", async () => {
@@ -164,7 +217,7 @@ describe.skipIf(!url)("Migración 008 (precio por tipo y zona) sobre datos v7", 
     await admin.end();
   });
 
-  it("actualiza los 4 tipos, inserta los 3 nuevos y ajusta pesos máximos", async () => {
+  it("actualiza los 4 tipos, inserta los 3 nuevos y ajusta pesos máximos (y 011 los deja activos con su orden)", async () => {
     expect(await new PgTipoCargaRepository(db).listar()).toEqual(TIPOS_CARGA_SEED);
     const { rows } = await db.query("SELECT nombre FROM schema_migrations WHERE nombre LIKE '008%'");
     expect(rows).toHaveLength(1);

@@ -70,7 +70,8 @@ describe("Catálogos", () => {
     expect(ciudades.body.map((c: { nombre: string }) => c.nombre)).toEqual(["Atuntaqui", "Ibarra", "Otavalo", "Quito"]);
     const tipos = await request(app).get("/api/tipos-carga").set(auth(tokenOperador)).expect(200);
     expect(tipos.body.map((t: { codigo: string }) => t.codigo)).toEqual(["SOBRE", "PAQUETE", "CARTON", "VALIJA", "TELA", "PLUMON_PEQUENO", "PLUMON_GRANDE"]);
-    expect(tipos.body).toEqual(TIPOS_V8);
+    // Panel (v11): con estado, orden y auditoría.
+    expect(tipos.body).toEqual(TIPOS_V8.map((t, i) => ({ ...t, activo: true, orden: i + 1, actualizadoEn: null, actualizadoPor: null })));
     const rutas = await request(app).get("/api/rutas?activa=true").set(auth(tokenOperador)).expect(200);
     expect(rutas.body).toHaveLength(16);
     expect(rutas.body.some((r: object) => "tarifaBase" in r)).toBe(false);

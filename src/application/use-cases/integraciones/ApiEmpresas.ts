@@ -1,3 +1,4 @@
+import { aTipoCargaPublico, type TipoCargaPublico } from "../../../domain/carga/TipoCarga.js";
 import { desarmarApiKey } from "../../../domain/integracion/ApiKeyFormato.js";
 import { notaRegistroApi, validarReferenciaExterna } from "../../../domain/integracion/EnvioExterno.js";
 import {
@@ -16,7 +17,7 @@ import type {
   SolicitudApi,
   SolicitudApiRepository,
 } from "../../ports/integraciones.js";
-import type { CiudadRepository, EnvioRepository, RutaRepository } from "../../ports/repositories.js";
+import type { CiudadRepository, EnvioRepository, RutaRepository, TipoCargaRepository } from "../../ports/repositories.js";
 import type { Clock, IdGenerator } from "../../ports/services.js";
 import type { CotizarEnvio, ItemSolicitud } from "../envios/CotizarEnvio.js";
 import type { CrearEnvio } from "../envios/CrearEnvio.js";
@@ -80,23 +81,31 @@ async function resolverRuta(rutas: RutaRepository, origenId: number, ciudad: str
 export interface CoberturaDTO {
   origen: string;
   destinos: { ciudad: string; tiempoEstimadoMin: number }[];
+  /** v11: tipos de carga activos que la empresa puede enviar, con sus precios y peso máximo. */
+  tiposCarga: TipoCargaPublico[];
 }
 
 export class CoberturaApi {
   constructor(
     private readonly rutas: RutaRepository,
     private readonly ciudades: CiudadRepository,
+    private readonly tipos: TipoCargaRepository,
   ) {}
 
   async ejecutar(ctx: ContextoApi): Promise<CoberturaDTO> {
     const origenId = ctx.integracion.ciudadOrigenId;
-    const [origen, rutas] = await Promise.all([this.ciudades.buscarPorId(origenId), this.rutas.listar()]);
+    const [origen, rutas, tipos] = await Promise.all([
+      this.ciudades.buscarPorId(origenId),
+      this.rutas.listar(),
+      this.tipos.listar({ activos: true }),
+    ]);
     return {
       origen: origen?.nombre ?? "?",
       destinos: rutas
         .filter((r) => r.origen.id === origenId && esOperativa(r))
         .map((r) => ({ ciudad: r.destino.nombre, tiempoEstimadoMin: r.tiempoEstimadoMin }))
         .sort((a, b) => a.ciudad.localeCompare(b.ciudad, "es")),
+      tiposCarga: tipos.map(aTipoCargaPublico),
     };
   }
 }

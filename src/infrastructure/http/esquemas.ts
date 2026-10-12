@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { TIPOS_CARGA } from "../../domain/carga/TipoCarga.js";
+import { CODIGO_TIPO_CARGA } from "../../domain/carga/TipoCarga.js";
+import { CATEGORIAS_ARTICULO, ICONOS_ARTICULO } from "../../domain/catalogo/ArticuloRestringido.js";
 import { ESTADOS } from "../../domain/envio/EstadoEnvio.js";
 import { RECIBIDO_POR } from "../../domain/envio/Evidencia.js";
 import { MAX_DIRECCION_REMITENTE } from "../../domain/envio/Envio.js";
@@ -51,8 +52,14 @@ export const evidenciaSchema = z.object({
     .max(RECIBIDO_POR.max, `máximo ${RECIBIDO_POR.max} caracteres`),
 });
 
+/**
+ * Código de tipo de carga (v11: configurable). Aquí solo la forma; que exista (422 VALIDACION) y esté activo
+ * (422 TIPO_CARGA_INACTIVO) lo comprueba el caso de uso contra el catálogo vigente.
+ */
+export const codigoTipoCargaSchema = z.string().regex(CODIGO_TIPO_CARGA, "código de tipo de carga inválido");
+
 const itemSchema = z.object({
-  tipoCarga: z.enum(TIPOS_CARGA),
+  tipoCarga: codigoTipoCargaSchema,
   cantidad: z.coerce.number().int().min(1).max(MAX_CANTIDAD),
   pesoKg: z.coerce.number().positive(), // peso por unidad
 });
@@ -192,3 +199,71 @@ export const webhookSchema = z.strictObject({
 });
 
 export const filtroEntregasSchema = z.object({ estado: z.enum(ESTADOS_ENTREGA).optional() });
+
+// ── Catálogo configurable (v11, ADMIN) ───────────────────────────────────────
+// Forma y tipos; los rangos (precios ≤ 1000 con 2 decimales, mayoreo < precio, nombre 2–40…) los valida el dominio.
+
+const mayoreoSchema = z.strictObject({ minimoExclusivo: z.number(), precio: z.number() });
+
+const camposTipoCarga = {
+  nombre: z.string().max(200),
+  precio: z.number(),
+  precioRural: z.number().nullable(),
+  mayoreo: mayoreoSchema.nullable(),
+  pesoMaxKg: z.number(),
+  activo: z.boolean().optional(),
+};
+
+export const crearTipoCargaSchema = z.strictObject({
+  codigo: z.string().max(60),
+  ...camposTipoCarga,
+  // por comodidad, omitirlos equivale a null (sin precio rural / sin mayoreo)
+  precioRural: camposTipoCarga.precioRural.optional().transform((v) => v ?? null),
+  mayoreo: camposTipoCarga.mayoreo.optional().transform((v) => v ?? null),
+});
+
+// `codigo` es inmutable: enviarlo (o cualquier otro campo desconocido) → 400.
+export const actualizarTipoCargaSchema = z
+  .strictObject(camposTipoCarga)
+  .partial()
+  .refine((v) => Object.values(v).some((x) => x !== undefined), "Debe enviar al menos un campo");
+
+export const ordenTiposCargaSchema = z.strictObject({
+  codigos: z
+    .array(z.string().max(60))
+    .min(1)
+    .max(500)
+    .refine((c) => new Set(c).size === c.length, "los códigos no se pueden repetir"),
+});
+
+export const filtroHistorialTiposSchema = z.object({ codigo: z.string().max(60).optional() });
+
+export const listarTiposCargaSchema = z.object({
+  todos: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => v === "true"),
+});
+
+const camposArticulo = {
+  categoria: z.enum(CATEGORIAS_ARTICULO),
+  titulo: z.string().max(200),
+  detalle: z.string().max(600).nullish(),
+  icono: z.enum(ICONOS_ARTICULO).nullish(),
+  activo: z.boolean().optional(),
+};
+
+export const crearArticuloSchema = z.strictObject(camposArticulo);
+
+export const actualizarArticuloSchema = z
+  .strictObject(camposArticulo)
+  .partial()
+  .refine((v) => Object.values(v).some((x) => x !== undefined), "Debe enviar al menos un campo");
+
+export const ordenArticulosSchema = z.strictObject({
+  categoria: z.enum(CATEGORIAS_ARTICULO),
+  ids: z
+    .array(z.uuid("id inválido"))
+    .max(500)
+    .refine((ids) => new Set(ids).size === ids.length, "los ids no se pueden repetir"),
+});

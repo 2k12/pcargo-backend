@@ -1,4 +1,3 @@
-import type { TipoCarga } from "../../../domain/carga/TipoCarga.js";
 import { normalizarNombreCiudad, type Ciudad } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
@@ -6,7 +5,6 @@ import type {
   CambiosCiudad,
   CiudadRepository,
   RutaRepository,
-  TipoCargaRepository,
 } from "../../ports/repositories.js";
 
 function exigirAdmin(actor: Actor): void {
@@ -66,12 +64,5 @@ export class EliminarCiudad {
       );
     }
     await this.ciudades.eliminar(id);
-  }
-}
-
-export class ListarTiposCarga {
-  constructor(private readonly tipos: TipoCargaRepository) {}
-  ejecutar(): Promise<TipoCarga[]> {
-    return this.tipos.listar();
   }
 }

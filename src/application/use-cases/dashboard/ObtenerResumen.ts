@@ -1,10 +1,10 @@
-import { TIPOS_CARGA, type TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
+import type { TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
 import { ESTADOS, type EstadoEnvio } from "../../../domain/envio/EstadoEnvio.js";
 import { FORMAS_PAGO, type FormaPago } from "../../../domain/envio/FormaPago.js";
 import type { Canal } from "../../../domain/integracion/Integracion.js";
 import { nombreRuta } from "../../../domain/ruta/Ruta.js";
 import { DomainError, redondear2 } from "../../../domain/shared/DomainError.js";
-import type { ClienteRepository, EnvioRepository, RutaRepository } from "../../ports/repositories.js";
+import type { ClienteRepository, EnvioRepository, RutaRepository, TipoCargaRepository } from "../../ports/repositories.js";
 import type { Clock } from "../../ports/services.js";
 
 export interface FiltroResumen {
@@ -81,6 +81,8 @@ export class ObtenerResumen {
     private readonly rutas: RutaRepository,
     private readonly clientes?: ClienteRepository,
     private readonly clock: Clock = { ahora: () => new Date() },
+    /** Catálogo vigente: `porTipo` lista los tipos activos (en 0 si no hay piezas) y además los usados en los envíos. */
+    private readonly tipos?: TipoCargaRepository,
   ) {}
 
   async ejecutar(filtro: FiltroResumen = {}): Promise<Resumen> {
@@ -89,7 +91,7 @@ export class ObtenerResumen {
     if (filtro.desde && filtro.hasta && filtro.desde > filtro.hasta) {
       throw new DomainError("VALIDACION", "La fecha inicial no puede ser posterior a la final");
     }
-    const [todos, rutas, clientes] = await Promise.all([
+    const [todos, rutas, clientes, tiposActivos] = await Promise.all([
       this.envios.listar({
         ...(filtro.clienteId ? { clienteId: filtro.clienteId } : {}),
         ...(filtro.canal ? { canal: filtro.canal } : {}),
@@ -97,10 +99,11 @@ export class ObtenerResumen {
       }),
       this.rutas.listar(),
       this.clientes ? this.clientes.listar() : Promise.resolve([]),
+      this.tipos ? this.tipos.listar({ activos: true }) : Promise.resolve([]),
     ]);
 
     const porEstado = Object.fromEntries(ESTADOS.map((e) => [e, 0])) as Record<EstadoEnvio, number>;
-    const porTipo = new Map<TipoCargaCodigo, number>(TIPOS_CARGA.map((t) => [t, 0]));
+    const porTipo = new Map<TipoCargaCodigo, number>(tiposActivos.map((t) => [t.codigo, 0]));
     const porPago = new Map<FormaPago, Acumulado>(FORMAS_PAGO.map((f) => [f, { envios: 0, monto: 0 }]));
     const porRuta = new Map<number, Acumulado>();
     const porCliente = new Map<string | null, Acumulado>();

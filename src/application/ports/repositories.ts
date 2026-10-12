@@ -1,4 +1,5 @@
-import type { TipoCarga, TipoCargaCodigo } from "../../domain/carga/TipoCarga.js";
+import type { CambioTipoCarga, TipoCarga, TipoCargaCodigo } from "../../domain/carga/TipoCarga.js";
+import type { ArticuloRestringido } from "../../domain/catalogo/ArticuloRestringido.js";
 import type { Cliente, DatosCliente } from "../../domain/cliente/Cliente.js";
 import type { Envio } from "../../domain/envio/Envio.js";
 import type { EstadoEnvio } from "../../domain/envio/EstadoEnvio.js";
@@ -40,8 +41,40 @@ export interface CiudadRepository {
 }
 
 export interface TipoCargaRepository {
-  listar(): Promise<TipoCarga[]>;
+  /** Por `orden` y, a igualdad, por código. `activos: true` → solo los activos. */
+  listar(filtro?: { activos?: boolean }): Promise<TipoCarga[]>;
   buscarPorCodigo(codigo: TipoCargaCodigo): Promise<TipoCarga | null>;
+  /** Sin distinguir mayúsculas; `excluirCodigo` permite conservar el nombre propio al editar. */
+  existeNombre(nombre: string, excluirCodigo?: TipoCargaCodigo): Promise<boolean>;
+  /**
+   * Alta con su entrada de historial (atómico). Código o nombre repetidos → DomainError("CONFLICTO").
+   */
+  crear(tipo: TipoCarga, cambio: CambioTipoCarga): Promise<void>;
+  /**
+   * Guarda los tipos ya existentes indicados y sus entradas de historial (atómico). Nombre repetido o que no quede
+   * ningún tipo activo → DomainError("CONFLICTO") sin guardar nada.
+   */
+  actualizar(tipos: TipoCarga[], cambios: CambioTipoCarga[]): Promise<void>;
+  /**
+   * Elimina el tipo y registra el cambio (atómico). Si algún envío lo usa o es el último activo →
+   * DomainError("CONFLICTO") sin borrar nada.
+   */
+  eliminar(codigo: TipoCargaCodigo, cambio: CambioTipoCarga): Promise<void>;
+  /** Historial (más recientes primero, orden estable); `codigo` filtra por tipo. */
+  listarHistorial(
+    filtro: { codigo?: TipoCargaCodigo },
+    paginacion: Paginacion,
+  ): Promise<{ cambios: CambioTipoCarga[]; total: number }>;
+}
+
+export interface ArticuloRestringidoRepository {
+  /** Por categoría (PROHIBIDO, CONDICIONADO, NOTA), orden e id. `activos: true` → solo los publicados. */
+  listar(filtro?: { activos?: boolean }): Promise<ArticuloRestringido[]>;
+  buscarPorId(id: string): Promise<ArticuloRestringido | null>;
+  crear(articulo: ArticuloRestringido): Promise<void>;
+  /** Guarda los artículos existentes indicados (atómico; p. ej. un reordenamiento). */
+  actualizar(articulos: ArticuloRestringido[]): Promise<void>;
+  eliminar(id: string): Promise<void>;
 }
 
 export interface NuevaRuta {
@@ -110,6 +143,8 @@ export interface EnvioRepository {
   buscarPorId(id: string): Promise<Envio | null>;
   buscarPorNumeroGuia(numeroGuia: number): Promise<Envio | null>;
   existeNumeroGuia(numeroGuia: number): Promise<boolean>;
+  /** ¿Algún envío (de cualquier estado) lleva ítems de este tipo de carga? */
+  usaTipoCarga(codigo: TipoCargaCodigo): Promise<boolean>;
   /** Máximo número de guía registrado + 1 (1 si no hay envíos). */
   siguienteNumeroGuia(): Promise<number>;
   /** Todos los que cumplen el filtro, más recientes primero (para agregados como el dashboard). */

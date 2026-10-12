@@ -11,6 +11,7 @@ import type {
   SolicitudApiRepository,
 } from "../application/ports/integraciones.js";
 import type {
+  ArticuloRestringidoRepository,
   CiudadRepository,
   ClienteRepository,
   EnvioRepository,
@@ -33,8 +34,24 @@ import {
   CrearCiudad,
   EliminarCiudad,
   ListarCiudades,
-  ListarTiposCarga,
 } from "../application/use-cases/catalogo/Catalogo.js";
+import {
+  ActualizarArticulo,
+  CrearArticulo,
+  EliminarArticulo,
+  ListarArticulos,
+  ListarArticulosPublicos,
+  ReordenarArticulos,
+} from "../application/use-cases/catalogo/ArticulosRestringidos.js";
+import {
+  ActualizarTipoCarga,
+  CrearTipoCarga,
+  EliminarTipoCarga,
+  LeerTiposCarga,
+  ListarHistorialTiposCarga,
+  ListarTiposCarga,
+  ReordenarTiposCarga,
+} from "../application/use-cases/catalogo/TiposCarga.js";
 import {
   ActualizarCliente,
   CrearCliente,
@@ -95,6 +112,7 @@ import { crearClienteRedis, esperarRedis, RedisCache, RedisLimitadorTasa } from 
 import type { Config } from "./config/env.js";
 import {
   ciudadesSemilla,
+  InMemoryArticuloRestringidoRepository,
   InMemoryCiudadRepository,
   InMemoryEnvioRepository,
   InMemoryRutaRepository,
@@ -108,6 +126,7 @@ import {
   InMemoryIntegracionRepository,
   InMemorySolicitudApiRepository,
 } from "./persistence/memory/InMemoryIntegraciones.js";
+import { PgArticuloRestringidoRepository } from "./persistence/postgres/PgArticulosRestringidos.js";
 import { PgClienteRepository } from "./persistence/postgres/PgClienteRepository.js";
 import {
   PgEntregaWebhookRepository,
@@ -138,6 +157,8 @@ export interface Adaptadores {
   usuarios: UsuarioRepository;
   ciudades: CiudadRepository;
   tiposCarga: TipoCargaRepository;
+  /** «Qué no transportamos» de la landing (v11). */
+  articulos: ArticuloRestringidoRepository;
   rutas: RutaRepository;
   envios: EnvioRepository;
   clientes: ClienteRepository;
@@ -175,6 +196,11 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
   // Renombrar o desactivar ciudades/rutas cambia nombres y disponibilidad en todas las vistas cacheadas.
   const trasCambioCatalogo = [ESPACIOS.catalogo, ESPACIOS.dashboard, ESPACIOS.seguimiento];
   const enCatalogo = (activa?: boolean) => (activa === undefined ? "todas" : String(activa));
+  // Tipos de carga (v11): cambian el panel, el catálogo público, el cotizador, la cobertura de la API de empresas
+  // (todos leen el catálogo vigente o el espacio `catalogo:`) y la lista de tipos del dashboard (porTipo).
+  const trasCambioTipos = [ESPACIOS.catalogo, ESPACIOS.dashboard];
+  const depsCatalogo = { tipos: a.tiposCarga, ids: a.ids, clock: a.clock };
+  const depsArticulos = { articulos: a.articulos, ids: a.ids, clock: a.clock };
 
   const publicUrl = opciones.publicUrl ?? "http://localhost:5173";
   // Webhooks de los envíos de empresas: se encolan en la misma transacción que el cambio del envío (outbox).
@@ -218,10 +244,27 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     crearCiudad: invalidaTras(new CrearCiudad(a.ciudades), cache, trasCambioCatalogo),
     actualizarCiudad: invalidaTras(new ActualizarCiudad(a.ciudades), cache, trasCambioCatalogo),
     eliminarCiudad: invalidaTras(new EliminarCiudad(a.ciudades, rutas), cache, trasCambioCatalogo),
-    listarTiposCarga: conCache(new ListarTiposCarga(a.tiposCarga), cache, {
-      clave: () => claveCatalogo("tipos-carga"),
-      ttlSeg: TTL.tiposCarga,
+    // El permiso (`todos` solo ADMIN) se comprueba ANTES de la lectura cacheada, que solo varía según `todos`.
+    listarTiposCarga: new ListarTiposCarga(
+      conCache(new LeerTiposCarga(a.tiposCarga), cache, {
+        clave: (todos) => claveCatalogo(`tipos-carga:${todos ? "todos" : "activos"}`),
+        ttlSeg: TTL.tiposCarga,
+      }),
+    ),
+    crearTipoCarga: invalidaTras(new CrearTipoCarga(depsCatalogo), cache, trasCambioTipos),
+    actualizarTipoCarga: invalidaTras(new ActualizarTipoCarga(depsCatalogo), cache, trasCambioTipos),
+    eliminarTipoCarga: invalidaTras(new EliminarTipoCarga(depsCatalogo, a.envios), cache, trasCambioTipos),
+    reordenarTiposCarga: invalidaTras(new ReordenarTiposCarga(depsCatalogo), cache, trasCambioTipos),
+    historialTiposCarga: new ListarHistorialTiposCarga(a.tiposCarga),
+    articulosPublicos: conCache(new ListarArticulosPublicos(a.articulos), cache, {
+      clave: () => claveCatalogo("articulos-restringidos"),
+      ttlSeg: TTL.catalogo,
     }),
+    listarArticulos: new ListarArticulos(a.articulos),
+    crearArticulo: invalidaTras(new CrearArticulo(depsArticulos), cache, [ESPACIOS.catalogo]),
+    actualizarArticulo: invalidaTras(new ActualizarArticulo(depsArticulos), cache, [ESPACIOS.catalogo]),
+    eliminarArticulo: invalidaTras(new EliminarArticulo(a.articulos), cache, [ESPACIOS.catalogo]),
+    reordenarArticulos: invalidaTras(new ReordenarArticulos(depsArticulos), cache, [ESPACIOS.catalogo]),
     catalogoPublico: conCache(new ObtenerCatalogoPublico(a.ciudades, a.tiposCarga, rutas), cache, {
       clave: () => claveCatalogo("publico"),
       ttlSeg: TTL.catalogo,
@@ -253,7 +296,7 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
       clave: (guia) => `${ESPACIOS.seguimiento}${claveGuia(guia)}`,
       ttlSeg: TTL.seguimiento,
     }),
-    resumen: conCache(new ObtenerResumen(a.envios, rutas, a.clientes, a.clock), cache, {
+    resumen: conCache(new ObtenerResumen(a.envios, rutas, a.clientes, a.clock, a.tiposCarga), cache, {
       clave: (f) =>
         `${ESPACIOS.dashboard}resumen:${f?.clienteId ?? "todos"}:${f?.canal ?? ""}:${f?.integracionId ?? ""}:${f?.desde ?? ""}:${f?.hasta ?? ""}`,
       ttlSeg: TTL.dashboard,
@@ -279,7 +322,8 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     autenticarApiKey: new AutenticarApiKey(a.integraciones, a.apiKeys, a.clock),
     registrarSolicitudApi: new RegistrarSolicitudApi(a.solicitudesApi, a.ids),
     ejecutarIdempotente: new EjecutarIdempotente(a.idempotencia, a.clock),
-    coberturaApi: new CoberturaApi(rutas, a.ciudades),
+    // Sin caché propia: lee rutas (cacheadas, se invalidan con el catálogo) y los tipos activos vigentes.
+    coberturaApi: new CoberturaApi(rutas, a.ciudades, a.tiposCarga),
     cotizarApi: new CotizarApi(rutas, cotizar),
     crearEnvioApi: invalidaTras(crearEnvioApi, cache, [ESPACIOS.dashboard]),
     crearLoteApi: invalidaTras(new CrearLoteApi(crearEnvioApi), cache, [ESPACIOS.dashboard]),
@@ -322,12 +366,15 @@ export async function adaptadoresEnMemoria(
     solicitudesApi.eliminarDeIntegracion(id);
     idempotencia.eliminarDeIntegracion(id);
   });
+  const envios = new InMemoryEnvioRepository({ outbox: entregasWebhook, nombreIntegracion: integraciones.nombre });
   return {
     usuarios: new InMemoryUsuarioRepository(usuarios),
     ciudades: new InMemoryCiudadRepository(ciudades),
-    tiposCarga: new InMemoryTipoCargaRepository(),
+    // Como la FK de envio_items en Postgres: no se elimina un tipo que algún envío usa.
+    tiposCarga: new InMemoryTipoCargaRepository(undefined, { usaTipoCarga: (c) => envios.usaTipoCarga(c) }),
+    articulos: new InMemoryArticuloRestringidoRepository(),
     rutas: new InMemoryRutaRepository(ciudades),
-    envios: new InMemoryEnvioRepository({ outbox: entregasWebhook, nombreIntegracion: integraciones.nombre }),
+    envios,
     clientes: new InMemoryClienteRepository(),
     almacen: new AlmacenMemoria(),
     hasher,
@@ -357,6 +404,7 @@ export function adaptadoresPostgres(
     usuarios: new PgUsuarioRepository(db),
     ciudades: new PgCiudadRepository(db),
     tiposCarga: new PgTipoCargaRepository(db),
+    articulos: new PgArticuloRestringidoRepository(db),
     rutas: new PgRutaRepository(db),
     envios: new PgEnvioRepository(db),
     clientes: new PgClienteRepository(db),
