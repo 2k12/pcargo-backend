@@ -1,5 +1,11 @@
 import "dotenv/config";
+import { join, resolve } from "node:path";
 import { z } from "zod";
+
+/** <raíz del backend>/storage, igual desde src/ (tsx) y dist/ (build). */
+export const CARPETA_STORAGE_DEFECTO = join(import.meta.dirname, "..", "..", "..", "storage");
+
+const opcionalNoVacio = z.preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.string().optional());
 
 const esquema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
@@ -14,9 +20,27 @@ const esquema = z.object({
   CACHE_DRIVER: z.enum(["redis", "memory", "none"]).optional(),
   /** Saltos de proxy inverso de confianza, para leer la IP real del cliente (0 = ninguno). */
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  /** Almacén de archivos (evidencias de entrega): local | r2 | memory. Por defecto local (memory con DB_DRIVER=memory). */
+  STORAGE_DRIVER: opcionalNoVacio.pipe(z.enum(["local", "r2", "memory"]).optional()),
+  /** Carpeta del almacén local; relativa al directorio de trabajo. Por defecto <backend>/storage. */
+  STORAGE_LOCAL_DIR: opcionalNoVacio,
+  /** Cloudflare R2 (obligatorias con STORAGE_DRIVER=r2). */
+  R2_ACCOUNT_ID: opcionalNoVacio,
+  R2_ACCESS_KEY_ID: opcionalNoVacio,
+  R2_SECRET_ACCESS_KEY: opcionalNoVacio,
+  R2_BUCKET: opcionalNoVacio,
 });
 
-export type Config = Omit<z.infer<typeof esquema>, "CACHE_DRIVER"> & { CACHE_DRIVER: "redis" | "memory" | "none" };
+type StorageDriver = "local" | "r2" | "memory";
+
+export type Config = Omit<z.infer<typeof esquema>, "CACHE_DRIVER" | "STORAGE_DRIVER" | "STORAGE_LOCAL_DIR"> & {
+  CACHE_DRIVER: "redis" | "memory" | "none";
+  STORAGE_DRIVER: StorageDriver;
+  /** Ruta absoluta. */
+  STORAGE_LOCAL_DIR: string;
+};
+
+const VARIABLES_R2 = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET"] as const;
 
 export function cargarConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const r = esquema.safeParse(env);
@@ -27,5 +51,17 @@ export function cargarConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.CACHE_DRIVER === "redis" && !config.REDIS_URL) {
     throw new Error("Configuración inválida: CACHE_DRIVER=redis requiere REDIS_URL");
   }
-  return { ...config, CACHE_DRIVER: config.CACHE_DRIVER ?? (config.REDIS_URL ? "redis" : "memory") };
+  const storage: StorageDriver = config.STORAGE_DRIVER ?? (config.DB_DRIVER === "memory" ? "memory" : "local");
+  if (storage === "r2") {
+    const faltan = VARIABLES_R2.filter((v) => !config[v]);
+    if (faltan.length) {
+      throw new Error(`Configuración inválida: STORAGE_DRIVER=r2 requiere ${faltan.join(", ")}`);
+    }
+  }
+  return {
+    ...config,
+    CACHE_DRIVER: config.CACHE_DRIVER ?? (config.REDIS_URL ? "redis" : "memory"),
+    STORAGE_DRIVER: storage,
+    STORAGE_LOCAL_DIR: config.STORAGE_LOCAL_DIR ? resolve(config.STORAGE_LOCAL_DIR) : CARPETA_STORAGE_DEFECTO,
+  };
 }

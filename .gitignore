@@ -3,3 +3,5 @@ dist/
 coverage/
 .env
 *.log
+# Almacén local de archivos (evidencias de entrega): datos personales, nunca al repo
+/storage/

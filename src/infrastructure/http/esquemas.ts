@@ -1,9 +1,12 @@
 import { z } from "zod";
 import { TIPOS_CARGA } from "../../domain/carga/TipoCarga.js";
 import { ESTADOS } from "../../domain/envio/EstadoEnvio.js";
+import { RECIBIDO_POR } from "../../domain/envio/Evidencia.js";
+import { MAX_DIRECCION_REMITENTE } from "../../domain/envio/Envio.js";
 import { FORMAS_PAGO } from "../../domain/envio/FormaPago.js";
 import { MAX_CANTIDAD, MAX_ITEMS } from "../../domain/tarifa/calcularTarifa.js";
 import { ZONAS } from "../../domain/tarifa/Zona.js";
+import { NOMBRE_USUARIO } from "../../domain/usuario/Usuario.js";
 
 // Validación de forma (tipos/obligatorios). Las reglas de negocio viven en el dominio.
 
@@ -12,6 +15,28 @@ const texto = z.string().trim().min(1, "obligatorio");
 export const loginSchema = z.object({
   email: z.email("correo inválido"),
   password: z.string().min(1, "obligatorio"),
+});
+
+// Perfil propio: solo nombre y email; cualquier otro campo (p. ej. rol) → 400.
+export const actualizarPerfilSchema = z
+  .strictObject({
+    nombre: z.string().trim().min(NOMBRE_USUARIO.min).max(NOMBRE_USUARIO.max).optional(),
+    email: z.email("correo inválido").optional(),
+  })
+  .refine((v) => v.nombre !== undefined || v.email !== undefined, "Debe enviar al menos un campo (nombre o email)");
+
+// La política de la contraseña nueva (largo, letra y número, distinta) vive en el dominio.
+export const cambiarContrasenaSchema = z.object({
+  actual: z.string().min(1, "obligatorio").max(200),
+  nueva: z.string().max(200),
+});
+
+export const evidenciaSchema = z.object({
+  recibidoPor: z
+    .string({ error: "obligatorio" })
+    .trim()
+    .min(RECIBIDO_POR.min, `mínimo ${RECIBIDO_POR.min} caracteres`)
+    .max(RECIBIDO_POR.max, `máximo ${RECIBIDO_POR.max} caracteres`),
 });
 
 const itemSchema = z.object({
@@ -27,7 +52,12 @@ export const cotizacionSchema = z.object({
 });
 
 export const crearEnvioSchema = cotizacionSchema.extend({
-  remitente: z.object({ nombre: texto, telefono: texto }),
+  // dirección del remitente: opcional (0–200); vacía → null (lo aplica el dominio)
+  remitente: z.object({
+    nombre: texto,
+    telefono: texto,
+    direccion: z.string().trim().max(MAX_DIRECCION_REMITENTE).nullish(),
+  }),
   destinatario: z.object({ nombre: texto, telefono: texto, direccion: texto }),
   formaPago: z.enum(FORMAS_PAGO),
   descripcion: z.string().max(500).nullish(),

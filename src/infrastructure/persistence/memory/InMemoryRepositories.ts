@@ -13,7 +13,8 @@ import type {
 import type { TipoCarga, TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
 import { Envio, type EnvioProps } from "../../../domain/envio/Envio.js";
 import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
-import type { Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
+import { DomainError } from "../../../domain/shared/DomainError.js";
+import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
 import { CIUDADES, RUTAS_SEED, TIPOS_CARGA_SEED } from "../seed-data.js";
 
 // Adaptadores en memoria: usados en tests y en `DB_DRIVER=memory` (demo sin Postgres).
@@ -26,8 +27,32 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
   }
 
   async buscarPorId(id: string): Promise<Usuario | null> {
-    const u = this.usuarios.find((x) => x.id === id);
+    const u = this.usuarios.find((x) => x.id === id && x.activo);
     return u ? { id: u.id, nombre: u.nombre, email: u.email, rol: u.rol } : null;
+  }
+
+  async buscarCredencialesPorId(id: string): Promise<UsuarioConCredenciales | null> {
+    const u = this.usuarios.find((x) => x.id === id && x.activo);
+    return u ? { ...u } : null;
+  }
+
+  async existeEmail(email: string, excluirId?: string): Promise<boolean> {
+    return this.usuarios.some((u) => u.id !== excluirId && u.email === email);
+  }
+
+  async actualizarPerfil(id: string, cambios: CambiosPerfil): Promise<Usuario> {
+    const u = this.usuarios.find((x) => x.id === id)!;
+    if (cambios.email !== undefined && (await this.existeEmail(cambios.email, id))) {
+      throw new DomainError("CONFLICTO", "Ese correo ya está registrado por otro usuario");
+    }
+    if (cambios.nombre !== undefined) u.nombre = cambios.nombre;
+    if (cambios.email !== undefined) u.email = cambios.email;
+    return { id: u.id, nombre: u.nombre, email: u.email, rol: u.rol };
+  }
+
+  async actualizarPasswordHash(id: string, passwordHash: string): Promise<void> {
+    const u = this.usuarios.find((x) => x.id === id);
+    if (u) u.passwordHash = passwordHash;
   }
 }
 

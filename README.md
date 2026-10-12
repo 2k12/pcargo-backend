@@ -57,9 +57,21 @@ TEST_REDIS_URL=redis://localhost:6380 pnpm test                                 
   dashboard (60 s) y rastreo público (60 s). Las escrituras invalidan lo afectado al instante; el TTL solo acota el caso
   en que una invalidación falle.
 - **Límite de tasa** compartido entre instancias: login 10 intentos / 15 min por IP y correo; endpoints públicos
-  (`/publico/*`, `/seguimiento/*`) 60 / min por IP → 429 `DEMASIADAS_SOLICITUDES` con `Retry-After`.
+  (`/publico/*`, `/seguimiento/*`) 60 / min por IP; cambio de contraseña 10 / 15 min por usuario → 429
+  `DEMASIADAS_SOLICITUDES` con `Retry-After`.
 
 Si Redis cae, la API sigue funcionando sin caché ni límite (falla abierto) y se reconecta sola.
 Sin `REDIS_URL` todo funciona en memoria del proceso (`CACHE_DRIVER=none` desactiva la caché).
+
+## Archivos (evidencia de entrega)
+
+Las fotos de la guía firmada se guardan en un almacén **privado** (`STORAGE_DRIVER`); la API las sirve solo con token
+(`GET /envios/:id/evidencia`, `Cache-Control: private, no-store`) y la clave del archivo nunca sale en la API.
+
+| driver | uso | variables |
+|---|---|---|
+| `local` (por defecto) | desarrollo o servidor con disco persistente | `STORAGE_LOCAL_DIR` (por defecto `backend/storage/`, ignorada por git) |
+| `r2` | producción: bucket privado de Cloudflare R2 (API S3) | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (obligatorias) |
+| `memory` | tests y `DB_DRIVER=memory` (por defecto en ese modo) | — |
 
 Endpoints y tipos: ver `../docs/api-contract.md`.

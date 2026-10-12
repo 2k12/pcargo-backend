@@ -9,12 +9,20 @@ import {
   type EstadoEnvio,
   type ResultadoEntrega,
 } from "./EstadoEnvio.js";
+import { normalizarRecibidoPor, type EvidenciaEntrega, type TipoImagen } from "./Evidencia.js";
 import type { FormaPago } from "./FormaPago.js";
 
 export interface Contacto {
   nombre: string;
   telefono: string;
 }
+
+/** Remitente: la dirección es opcional (sale en la guía imprimible). */
+export interface Remitente extends Contacto {
+  direccion?: string | null;
+}
+
+export const MAX_DIRECCION_REMITENTE = 200;
 
 export interface Destinatario extends Contacto {
   direccion: string;
@@ -52,7 +60,7 @@ export interface EnvioProps {
   numeroGuia: number;
   /** Cliente frecuente que envía (y normalmente paga); null si es ocasional. */
   clienteId?: string | null;
-  remitente: Contacto;
+  remitente: { nombre: string; telefono: string; direccion: string | null };
   destinatario: Destinatario;
   rutaId: number;
   items: ItemEnvio[];
@@ -66,10 +74,12 @@ export interface EnvioProps {
   creadoEn: Date;
   actualizadoEn: Date;
   historial: EventoHistorial[];
+  /** Foto de la guía firmada y nombre de quien recibió (solo en ENTREGADO). */
+  evidencia?: EvidenciaEntrega | null;
 }
 
 export interface NuevoEnvio {
-  remitente: Contacto;
+  remitente: Remitente;
   destinatario: Destinatario;
   rutaId: number;
   /** Ítems ya cotizados (costo unitario y subtotal calculados por la tarifa). */
@@ -100,13 +110,21 @@ export class Envio {
     if (!datos.destinatario.direccion?.trim()) {
       throw new DomainError("VALIDACION", "La dirección de entrega es obligatoria");
     }
+    const direccionRemitente = datos.remitente.direccion?.trim() || null;
+    if (direccionRemitente && direccionRemitente.length > MAX_DIRECCION_REMITENTE) {
+      throw new DomainError("VALIDACION", `La dirección del remitente admite hasta ${MAX_DIRECCION_REMITENTE} caracteres`);
+    }
     if (datos.items.length === 0) throw new DomainError("VALIDACION", "El envío debe tener al menos un ítem");
     const usuario = { id: ctx.actor.id, nombre: ctx.actor.nombre };
     return new Envio({
       id: ctx.id,
       numeroGuia: ctx.numeroGuia,
       clienteId: datos.clienteId ?? null,
-      remitente: { nombre: datos.remitente.nombre.trim(), telefono: datos.remitente.telefono.trim() },
+      remitente: {
+        nombre: datos.remitente.nombre.trim(),
+        telefono: datos.remitente.telefono.trim(),
+        direccion: direccionRemitente,
+      },
       destinatario: {
         nombre: datos.destinatario.nombre.trim(),
         telefono: datos.destinatario.telefono.trim(),
@@ -123,11 +141,18 @@ export class Envio {
       creadoEn: ctx.ahora,
       actualizadoEn: ctx.ahora,
       historial: [{ estado: "REGISTRADO", nota: null, fecha: ctx.ahora, usuario }],
+      evidencia: null,
     });
   }
 
   static reconstruir(props: EnvioProps): Envio {
-    return new Envio({ ...props, items: [...props.items], historial: [...props.historial] });
+    return new Envio({
+      ...props,
+      remitente: { ...props.remitente, direccion: props.remitente.direccion ?? null },
+      items: [...props.items],
+      historial: [...props.historial],
+      evidencia: props.evidencia ? { ...props.evidencia } : null,
+    });
   }
 
   cambiarEstado(nuevo: EstadoEnvio, ctx: { ahora: Date; actor: Actor; nota?: string | null }): void {
@@ -146,6 +171,38 @@ export class Envio {
       fecha: ctx.ahora,
       usuario: { id: ctx.actor.id, nombre: ctx.actor.nombre },
     });
+  }
+
+  /**
+   * Registra (o reemplaza) la evidencia de entrega. Solo se admite en ENTREGADO.
+   * Devuelve la evidencia anterior, cuya foto debe borrarse del almacén.
+   */
+  registrarEvidencia(
+    datos: { recibidoPor: string; tipo: TipoImagen; bytes: number; clave: string },
+    ctx: { ahora: Date; actor: Actor },
+  ): EvidenciaEntrega | null {
+    const recibidoPor = normalizarRecibidoPor(datos.recibidoPor);
+    if (this.props.estado !== "ENTREGADO") {
+      throw new DomainError(
+        "ESTADO_INVALIDO",
+        `Solo se puede registrar la evidencia de un envío ENTREGADO (está ${this.props.estado})`,
+      );
+    }
+    const anterior = this.props.evidencia ?? null;
+    this.props.evidencia = {
+      recibidoPor,
+      tipo: datos.tipo,
+      bytes: datos.bytes,
+      clave: datos.clave,
+      subidaEn: ctx.ahora,
+      subidaPor: { id: ctx.actor.id, nombre: ctx.actor.nombre },
+    };
+    this.props.actualizadoEn = ctx.ahora;
+    return anterior;
+  }
+
+  get evidencia(): EvidenciaEntrega | null {
+    return this.props.evidencia ? { ...this.props.evidencia } : null;
   }
 
   get id(): string {
@@ -194,6 +251,12 @@ export class Envio {
   }
 
   toSnapshot(): EnvioProps {
-    return { ...this.props, items: [...this.props.items], historial: [...this.props.historial] };
+    return {
+      ...this.props,
+      remitente: { ...this.props.remitente },
+      items: [...this.props.items],
+      historial: [...this.props.historial],
+      evidencia: this.props.evidencia ? { ...this.props.evidencia } : null,
+    };
   }
 }

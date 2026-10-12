@@ -5,10 +5,11 @@ import type {
   EnvioRepository,
   RutaRepository,
   TipoCargaRepository,
+  UsuarioRepository,
 } from "../../src/application/ports/repositories.js";
 import { Envio } from "../../src/domain/envio/Envio.js";
-import { TIPOS_CARGA_SEED } from "../../src/infrastructure/persistence/seed-data.js";
-import { OPERADOR, solicitudEnvio } from "./fakes.js";
+import { TIPOS_CARGA_SEED, USUARIOS_SEED } from "../../src/infrastructure/persistence/seed-data.js";
+import { ADMIN, OPERADOR, solicitudEnvio } from "./fakes.js";
 
 export interface FabricaRepos {
   envios: EnvioRepository;
@@ -16,6 +17,8 @@ export interface FabricaRepos {
   ciudades: CiudadRepository;
   clientes: ClienteRepository;
   tiposCarga: TipoCargaRepository;
+  /** Con los usuarios semilla en su estado original (nombre, correo y contraseña). */
+  usuarios: UsuarioRepository;
 }
 
 /**
@@ -235,6 +238,83 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
         pesoMaxKg: 50,
       });
       expect(await repos.tiposCarga.buscarPorCodigo("CARTON")).toMatchObject({ precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 35 });
+    });
+
+    it("guarda la dirección opcional del remitente (null si no se indicó)", async () => {
+      const con = nuevoEnvio(1, { remitente: { nombre: "María Pérez", telefono: "0991234567", direccion: "Sucre 4-56, Ibarra" } });
+      const sin = nuevoEnvio(2);
+      await repos.envios.guardar(con);
+      await repos.envios.guardar(sin);
+      expect((await repos.envios.buscarPorId(con.id))?.toSnapshot().remitente).toEqual({
+        nombre: "María Pérez",
+        telefono: "0991234567",
+        direccion: "Sucre 4-56, Ibarra",
+      });
+      expect((await repos.envios.buscarPorId(sin.id))?.toSnapshot().remitente.direccion).toBeNull();
+    });
+
+    it("guarda, reemplaza y lista la evidencia de entrega con sus metadatos", async () => {
+      const e = nuevoEnvio(3);
+      await repos.envios.guardar(e);
+      expect((await repos.envios.buscarPorId(e.id))?.evidencia).toBeNull();
+      for (const [i, estado] of (["EN_TRANSITO", "EN_REPARTO", "ENTREGADO"] as const).entries()) {
+        e.cambiarEstado(estado, { ahora: new Date(Date.UTC(2026, 9, 1, 13 + i)), actor: OPERADOR });
+      }
+      const subidaEn = new Date(Date.UTC(2026, 9, 1, 17));
+      const clave1 = `evidencias/${e.id}/a.jpg`;
+      e.registrarEvidencia({ recibidoPor: "Rosa Cevallos", tipo: "image/jpeg", bytes: 1234, clave: clave1 }, { ahora: subidaEn, actor: OPERADOR });
+      await repos.envios.guardar(e);
+      const leido = (await repos.envios.buscarPorId(e.id))!;
+      expect(leido.evidencia).toEqual({
+        recibidoPor: "Rosa Cevallos",
+        tipo: "image/jpeg",
+        bytes: 1234,
+        subidaEn,
+        subidaPor: { id: OPERADOR.id, nombre: OPERADOR.nombre },
+        clave: clave1,
+      });
+      expect(leido.estado).toBe("ENTREGADO");
+      expect(leido.historial).toHaveLength(4);
+
+      const clave2 = `evidencias/${e.id}/b.webp`;
+      leido.registrarEvidencia({ recibidoPor: "Luis", tipo: "image/webp", bytes: 99, clave: clave2 }, { ahora: new Date(Date.UTC(2026, 9, 1, 18)), actor: ADMIN });
+      await repos.envios.guardar(leido);
+      const pagina = await repos.envios.listarPagina({ estado: "ENTREGADO" }, { pagina: 1, porPagina: 10 });
+      expect(pagina.envios.find((x) => x.id === e.id)?.evidencia).toMatchObject({
+        recibidoPor: "Luis",
+        tipo: "image/webp",
+        bytes: 99,
+        subidaPor: { id: ADMIN.id },
+        clave: clave2,
+      });
+      expect((await repos.envios.buscarPorId(e.id))?.historial).toHaveLength(4);
+    });
+
+    it("usuarios: busca credenciales por id, detecta correos repetidos y actualiza perfil y contraseña", async () => {
+      const op = USUARIOS_SEED[1]!;
+      const cred = (await repos.usuarios.buscarCredencialesPorId(op.id))!;
+      expect(cred).toMatchObject({ id: op.id, email: op.email, rol: "OPERADOR", activo: true });
+      expect(cred.passwordHash).toEqual(expect.any(String));
+      expect(await repos.usuarios.buscarCredencialesPorId("00000000-0000-4000-8000-0000000000ff")).toBeNull();
+
+      expect(await repos.usuarios.existeEmail("admin@pcargo.ec")).toBe(true);
+      expect(await repos.usuarios.existeEmail("admin@pcargo.ec", ADMIN.id)).toBe(false);
+      expect(await repos.usuarios.existeEmail("admin@pcargo.ec", op.id)).toBe(true);
+      expect(await repos.usuarios.existeEmail("nadie@pcargo.ec")).toBe(false);
+
+      expect(await repos.usuarios.actualizarPerfil(op.id, { nombre: "Paola Ruiz" })).toEqual({
+        id: op.id,
+        nombre: "Paola Ruiz",
+        email: op.email,
+        rol: "OPERADOR",
+      });
+      expect(await repos.usuarios.actualizarPerfil(op.id, { email: "paola@pcargo.ec" })).toMatchObject({ nombre: "Paola Ruiz", email: "paola@pcargo.ec" });
+      expect(await repos.usuarios.buscarPorEmail("paola@pcargo.ec")).toMatchObject({ id: op.id });
+      expect(await repos.usuarios.buscarPorEmail(op.email)).toBeNull();
+      await expect(repos.usuarios.actualizarPerfil(op.id, { email: "admin@pcargo.ec" })).rejects.toMatchObject({ code: "CONFLICTO" });
+
+      await repos.usuarios.actualizarPasswordHash(op.id, "hash-nuevo");
+      expect((await repos.usuarios.buscarCredencialesPorId(op.id))?.passwordHash).toBe("hash-nuevo");
     });
 
     it("devuelve null para envíos inexistentes", async () => {

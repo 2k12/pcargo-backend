@@ -1,4 +1,5 @@
 import type { Envio, EventoHistorial, ItemEnvio } from "../../domain/envio/Envio.js";
+import type { EvidenciaEntrega } from "../../domain/envio/Evidencia.js";
 import type { Ruta } from "../../domain/ruta/Ruta.js";
 
 export interface EventoHistorialDTO {
@@ -18,11 +19,20 @@ export interface GestionEntregaDTO extends GestionDTO {
   nota: string | null;
 }
 
+/** Metadatos de la evidencia de entrega. La clave del almacén no se expone. */
+export interface EvidenciaEntregaDTO {
+  recibidoPor: string;
+  tipo: string;
+  bytes: number;
+  subidaEn: string;
+  subidaPor: string | null;
+}
+
 export interface EnvioDTO {
   id: string;
   numeroGuia: number;
   clienteId: string | null;
-  remitente: { nombre: string; telefono: string };
+  remitente: { nombre: string; telefono: string; direccion: string | null };
   destinatario: { nombre: string; telefono: string; direccion: string };
   ruta: { id: number; origen: string; destino: string };
   items: ItemEnvio[];
@@ -35,6 +45,7 @@ export interface EnvioDTO {
   estado: string;
   registro: GestionDTO;
   entrega: GestionEntregaDTO | null;
+  evidencia: EvidenciaEntregaDTO | null;
   creadoEn: string;
   actualizadoEn: string;
   historial?: EventoHistorialDTO[];
@@ -47,6 +58,14 @@ export const toEventoDTO = (e: EventoHistorial): EventoHistorialDTO => ({
   usuario: e.usuario?.nombre ?? null,
 });
 
+export const toEvidenciaDTO = (e: EvidenciaEntrega): EvidenciaEntregaDTO => ({
+  recibidoPor: e.recibidoPor,
+  tipo: e.tipo,
+  bytes: e.bytes,
+  subidaEn: e.subidaEn.toISOString(),
+  subidaPor: e.subidaPor?.nombre ?? null,
+});
+
 export function toEnvioDTO(envio: Envio, ruta: Ruta | undefined, conHistorial = false): EnvioDTO {
   const s = envio.toSnapshot();
   const entrega = envio.ultimaGestionEntrega;
@@ -54,7 +73,7 @@ export function toEnvioDTO(envio: Envio, ruta: Ruta | undefined, conHistorial = 
     id: s.id,
     numeroGuia: s.numeroGuia,
     clienteId: s.clienteId ?? null,
-    remitente: s.remitente,
+    remitente: { nombre: s.remitente.nombre, telefono: s.remitente.telefono, direccion: s.remitente.direccion ?? null },
     destinatario: s.destinatario,
     ruta: { id: s.rutaId, origen: ruta?.origen.nombre ?? "?", destino: ruta?.destino.nombre ?? "?" },
     items: s.items,
@@ -67,6 +86,7 @@ export function toEnvioDTO(envio: Envio, ruta: Ruta | undefined, conHistorial = 
     estado: s.estado,
     registro: { fecha: envio.registro.fecha.toISOString(), operador: envio.registro.operador },
     entrega: entrega && { ...entrega, fecha: entrega.fecha.toISOString() },
+    evidencia: s.evidencia ? toEvidenciaDTO(s.evidencia) : null,
     creadoEn: s.creadoEn.toISOString(),
     actualizadoEn: s.actualizadoEn.toISOString(),
     ...(conHistorial ? { historial: s.historial.map(toEventoDTO) } : {}),

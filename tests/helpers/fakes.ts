@@ -42,3 +42,12 @@ export const JWT_SECRET_TEST = "secreto-de-pruebas-pcargo-123";
 
 /** Atajo para una solicitud de un solo ítem. */
 export const item = (tipoCarga: string, pesoKg: number, cantidad = 1) => ({ items: [{ tipoCarga, cantidad, pesoKg }] });
+
+/** Bytes mínimos con la firma (bytes mágicos) de cada formato, más un relleno. */
+export const IMAGENES = {
+  jpeg: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0xff, 0xd9]),
+  png: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]),
+  webp: Buffer.concat([Buffer.from("RIFF"), Buffer.from([0x1a, 0, 0, 0]), Buffer.from("WEBPVP8 "), Buffer.alloc(6)]),
+  /** Un PDF con extensión de imagen: el tipo se valida por contenido. */
+  falsa: Buffer.from("%PDF-1.7\n%âãÏÓ\n1 0 obj"),
+};

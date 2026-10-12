@@ -12,6 +12,8 @@ const STATUS: Record<ErrorCode, number> = {
   TRANSICION_INVALIDA: 422,
   PESO_INVALIDO: 422,
   RUTA_INACTIVA: 422,
+  ESTADO_INVALIDO: 422,
+  CONTRASENA_INCORRECTA: 422,
 };
 
 export function manejarErrores(err: unknown, _req: Request, res: Response, _next: NextFunction): void {

@@ -4,13 +4,21 @@ import type { Envio } from "../../domain/envio/Envio.js";
 import type { EstadoEnvio } from "../../domain/envio/EstadoEnvio.js";
 import type { FormaPago } from "../../domain/envio/FormaPago.js";
 import type { Ciudad, Ruta } from "../../domain/ruta/Ruta.js";
-import type { Usuario, UsuarioConCredenciales } from "../../domain/usuario/Usuario.js";
+import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../domain/usuario/Usuario.js";
 
 // Puertos de salida (driven ports). Los adaptadores viven en infrastructure/persistence.
 
 export interface UsuarioRepository {
   buscarPorEmail(email: string): Promise<UsuarioConCredenciales | null>;
+  /** Solo usuarios activos. */
   buscarPorId(id: string): Promise<Usuario | null>;
+  /** Con el hash de la contraseña (para cambiarla); solo usuarios activos. */
+  buscarCredencialesPorId(id: string): Promise<UsuarioConCredenciales | null>;
+  /** ¿El correo (ya en minúsculas) es de otro usuario? `excluirId` permite conservar el propio. */
+  existeEmail(email: string, excluirId?: string): Promise<boolean>;
+  /** Aplica los cambios presentes y devuelve el usuario. Correo repetido → DomainError("CONFLICTO"). */
+  actualizarPerfil(id: string, cambios: CambiosPerfil): Promise<Usuario>;
+  actualizarPasswordHash(id: string, passwordHash: string): Promise<void>;
 }
 
 export interface CambiosCiudad {

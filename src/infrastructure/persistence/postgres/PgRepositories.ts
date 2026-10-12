@@ -13,10 +13,11 @@ import type {
 import type { TipoCarga, TipoCargaCodigo } from "../../../domain/carga/TipoCarga.js";
 import { Envio, type EventoHistorial, type ItemEnvio } from "../../../domain/envio/Envio.js";
 import type { EstadoEnvio } from "../../../domain/envio/EstadoEnvio.js";
+import type { EvidenciaEntrega, TipoImagen } from "../../../domain/envio/Evidencia.js";
 import type { FormaPago } from "../../../domain/envio/FormaPago.js";
 import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
 import type { Zona } from "../../../domain/tarifa/Zona.js";
-import type { Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
+import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Db } from "./pool.js";
 
@@ -38,6 +39,44 @@ export class PgUsuarioRepository implements UsuarioRepository {
       [id],
     );
     return rows[0] ?? null;
+  }
+
+  async buscarCredencialesPorId(id: string): Promise<UsuarioConCredenciales | null> {
+    const { rows } = await this.db.query(
+      `SELECT id, nombre, email, rol, password_hash AS "passwordHash", activo
+         FROM usuarios WHERE id = $1 AND activo`,
+      [id],
+    );
+    return rows[0] ?? null;
+  }
+
+  async existeEmail(email: string, excluirId?: string): Promise<boolean> {
+    const { rowCount } = await this.db.query(
+      "SELECT 1 FROM usuarios WHERE email = $1 AND id IS DISTINCT FROM $2::uuid",
+      [email, excluirId ?? null],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async actualizarPerfil(id: string, c: CambiosPerfil): Promise<Usuario> {
+    try {
+      const { rows } = await this.db.query<Usuario>(
+        `UPDATE usuarios SET nombre = COALESCE($2, nombre), email = COALESCE($3, email)
+          WHERE id = $1 RETURNING id, nombre, email, rol`,
+        [id, c.nombre ?? null, c.email ?? null],
+      );
+      return rows[0]!;
+    } catch (e) {
+      // Dos usuarios tomando el mismo correo a la vez: decide la restricción UNIQUE.
+      if ((e as { code?: string }).code === "23505") {
+        throw new DomainError("CONFLICTO", "Ese correo ya está registrado por otro usuario");
+      }
+      throw e;
+    }
+  }
+
+  async actualizarPasswordHash(id: string, passwordHash: string): Promise<void> {
+    await this.db.query("UPDATE usuarios SET password_hash = $2 WHERE id = $1", [id, passwordHash]);
   }
 }
 
@@ -206,6 +245,7 @@ interface EnvioRow {
   cliente_id: string | null;
   remitente_nombre: string;
   remitente_telefono: string;
+  remitente_direccion: string | null;
   destinatario_nombre: string;
   destinatario_telefono: string;
   destinatario_direccion: string;
@@ -218,7 +258,28 @@ interface EnvioRow {
   creado_por: string | null;
   creado_en: Date;
   actualizado_en: Date;
+  evidencia_recibido_por: string | null;
+  evidencia_tipo: TipoImagen | null;
+  evidencia_bytes: number | null;
+  evidencia_subida_en: Date | null;
+  evidencia_subida_por: string | null;
+  evidencia_subida_por_nombre: string | null;
+  evidencia_clave: string | null;
 }
+
+const aEvidencia = (r: EnvioRow): EvidenciaEntrega | null =>
+  r.evidencia_clave
+    ? {
+        recibidoPor: r.evidencia_recibido_por!,
+        tipo: r.evidencia_tipo!,
+        bytes: r.evidencia_bytes!,
+        subidaEn: r.evidencia_subida_en!,
+        subidaPor: r.evidencia_subida_por
+          ? { id: r.evidencia_subida_por, nombre: r.evidencia_subida_por_nombre ?? "" }
+          : null,
+        clave: r.evidencia_clave,
+      }
+    : null;
 
 interface ItemRow {
   envio_id: string;
@@ -244,21 +305,29 @@ export class PgEnvioRepository implements EnvioRepository {
   /** Upsert del agregado; ítems solo al crear (son inmutables); eventos de historial nuevos. Todo en una transacción. */
   async guardar(envio: Envio): Promise<void> {
     const s = envio.toSnapshot();
+    const ev = s.evidencia ?? null;
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
       const upsert = await client.query<{ nuevo: boolean }>(
         `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,
             destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, descripcion,
-            costo, forma_pago, estado, creado_por, creado_en, actualizado_en, cliente_id, zona)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-         ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en
+            costo, forma_pago, estado, creado_por, creado_en, actualizado_en, cliente_id, zona,
+            remitente_direccion, evidencia_recibido_por, evidencia_tipo, evidencia_bytes, evidencia_subida_en,
+            evidencia_subida_por, evidencia_clave)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+         ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en,
+            evidencia_recibido_por = EXCLUDED.evidencia_recibido_por, evidencia_tipo = EXCLUDED.evidencia_tipo,
+            evidencia_bytes = EXCLUDED.evidencia_bytes, evidencia_subida_en = EXCLUDED.evidencia_subida_en,
+            evidencia_subida_por = EXCLUDED.evidencia_subida_por, evidencia_clave = EXCLUDED.evidencia_clave
          RETURNING (xmax = 0) AS nuevo`,
         [
           s.id, s.numeroGuia, s.remitente.nombre, s.remitente.telefono, s.destinatario.nombre,
           s.destinatario.telefono, s.destinatario.direccion, s.rutaId, envio.totalPiezas, envio.pesoTotalKg,
           s.descripcion, s.costo, s.formaPago, s.estado, s.creadoPor, s.creadoEn, s.actualizadoEn,
-          s.clienteId ?? null, s.zona,
+          s.clienteId ?? null, s.zona, s.remitente.direccion,
+          ev?.recibidoPor ?? null, ev?.tipo ?? null, ev?.bytes ?? null, ev?.subidaEn ?? null,
+          ev?.subidaPor?.id ?? null, ev?.clave ?? null,
         ],
       );
       if (upsert.rows[0]?.nuevo) {
@@ -349,7 +418,9 @@ export class PgEnvioRepository implements EnvioRepository {
     const p = [...params];
     const limite = pagina ? ` LIMIT $${p.push(pagina.limite)} OFFSET $${p.push(pagina.desde)}` : "";
     const { rows } = await this.db.query<EnvioRow>(
-      `SELECT e.* FROM envios e ${where} ORDER BY e.creado_en DESC, e.id DESC${limite}`,
+      `SELECT e.*, ue.nombre AS evidencia_subida_por_nombre
+         FROM envios e LEFT JOIN usuarios ue ON ue.id = e.evidencia_subida_por
+       ${where} ORDER BY e.creado_en DESC, e.id DESC${limite}`,
       p,
     );
     if (rows.length === 0) return [];
@@ -393,7 +464,7 @@ export class PgEnvioRepository implements EnvioRepository {
         id: r.id,
         numeroGuia: Number(r.numero_guia),
         clienteId: r.cliente_id,
-        remitente: { nombre: r.remitente_nombre, telefono: r.remitente_telefono },
+        remitente: { nombre: r.remitente_nombre, telefono: r.remitente_telefono, direccion: r.remitente_direccion },
         destinatario: {
           nombre: r.destinatario_nombre,
           telefono: r.destinatario_telefono,
@@ -410,6 +481,7 @@ export class PgEnvioRepository implements EnvioRepository {
         creadoEn: r.creado_en,
         actualizadoEn: r.actualizado_en,
         historial: porEnvio.get(r.id) ?? [],
+        evidencia: aEvidencia(r),
       }),
     );
   }

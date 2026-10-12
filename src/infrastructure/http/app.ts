@@ -26,7 +26,7 @@ export function crearApp(casos: CasosDeUso, opciones: OpcionesApp = {}): Express
     app.post("/api/auth/login", limitarTasa(opciones.limitador, REGLAS.login));
     app.use(["/api/publico", "/api/seguimiento"], limitarTasa(opciones.limitador, REGLAS.publico));
   }
-  app.use("/api", crearRouter(casos));
+  app.use("/api", crearRouter(casos, { limitador: opciones.limitador }));
   app.use(noEncontrado);
   app.use(manejarErrores);
   return app;

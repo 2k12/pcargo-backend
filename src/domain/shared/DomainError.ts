@@ -7,7 +7,11 @@ export type ErrorCode =
   | "CREDENCIALES_INVALIDAS"
   | "TRANSICION_INVALIDA"
   | "PESO_INVALIDO"
-  | "RUTA_INACTIVA";
+  | "RUTA_INACTIVA"
+  /** La operación no se admite en el estado actual del recurso (p. ej. evidencia de un envío no entregado). */
+  | "ESTADO_INVALIDO"
+  /** La contraseña actual no coincide al cambiarla (no es 401: la sesión sigue siendo válida). */
+  | "CONTRASENA_INCORRECTA";
 
 export interface OpcionesDomainError {
   /**

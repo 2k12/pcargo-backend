@@ -1,7 +1,11 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
+import type { LimitadorTasa } from "../../application/ports/cache.js";
 import type { CasosDeUso } from "../container.js";
 import {
   actualizarCiudadSchema,
+  actualizarPerfilSchema,
+  cambiarContrasenaSchema,
+  evidenciaSchema,
   actualizarClienteSchema,
   actualizarRutaSchema,
   cambioEstadoSchema,
@@ -18,9 +22,16 @@ import {
   paginacionSchema,
 } from "./esquemas.js";
 import { actorDe, autenticar } from "./middlewares/auth.js";
+import { limitarTasa, REGLAS } from "./middlewares/limitarTasa.js";
+import { bytesSubidos, subirArchivo } from "./middlewares/subirArchivo.js";
+
+export interface OpcionesRouter {
+  /** Sin limitador no se aplican límites de tasa (tests). */
+  limitador?: LimitadorTasa;
+}
 
 /** Adaptador de entrada HTTP: traduce peticiones a llamadas de casos de uso. */
-export function crearRouter(c: CasosDeUso): Router {
+export function crearRouter(c: CasosDeUso, opciones: OpcionesRouter = {}): Router {
   const publico = Router();
   const privado = Router();
 
@@ -50,6 +61,19 @@ export function crearRouter(c: CasosDeUso): Router {
 
   privado.get("/auth/me", async (_req, res) => {
     res.json(await c.perfil.ejecutar(actorDe(res)));
+  });
+
+  privado.patch("/auth/me", async (req, res) => {
+    res.json(await c.actualizarPerfil.ejecutar(actorDe(res), actualizarPerfilSchema.parse(req.body)));
+  });
+
+  // Límite por usuario: se aplica después de autenticar para contar por id y no por IP.
+  const limiteContrasena: RequestHandler[] = opciones.limitador
+    ? [limitarTasa(opciones.limitador, REGLAS.contrasena)]
+    : [];
+  privado.put("/auth/me/password", ...limiteContrasena, async (req, res) => {
+    await c.cambiarContrasena.ejecutar(actorDe(res), cambiarContrasenaSchema.parse(req.body));
+    res.status(204).end();
   });
 
   privado.get("/ciudades", async (req, res) => {
@@ -128,6 +152,21 @@ export function crearRouter(c: CasosDeUso): Router {
   privado.patch("/envios/:id/estado", async (req, res) => {
     const { estado, nota } = cambioEstadoSchema.parse(req.body);
     res.json(await c.cambiarEstado.ejecutar(actorDe(res), idUuid.parse(req.params.id), estado, nota));
+  });
+
+  privado.post("/envios/:id/evidencia", subirArchivo("foto"), async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    const { recibidoPor } = evidenciaSchema.parse(req.body ?? {});
+    res.json(await c.subirEvidencia.ejecutar(actorDe(res), id, { foto: bytesSubidos(req), recibidoPor }));
+  });
+
+  // Foto privada: solo con token y sin caché en navegador ni proxies.
+  privado.get("/envios/:id/evidencia", async (req, res) => {
+    const { bytes, tipo } = await c.obtenerEvidencia.ejecutar(idUuid.parse(req.params.id));
+    res
+      .status(200)
+      .set({ "Content-Type": tipo, "Cache-Control": "private, no-store", "Content-Disposition": "inline" })
+      .end(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length));
   });
 
   privado.get("/dashboard/resumen", async (req, res) => {

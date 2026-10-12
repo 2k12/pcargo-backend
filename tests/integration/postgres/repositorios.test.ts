@@ -4,15 +4,16 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrar } from "../../../src/infrastructure/persistence/postgres/migrar.js";
 import { sembrar } from "../../../src/infrastructure/persistence/postgres/sembrar.js";
-import { TIPOS_CARGA_SEED } from "../../../src/infrastructure/persistence/seed-data.js";
+import { TIPOS_CARGA_SEED, USUARIOS_SEED } from "../../../src/infrastructure/persistence/seed-data.js";
 import {
   ciudadesSemilla,
   InMemoryCiudadRepository,
   InMemoryEnvioRepository,
   InMemoryRutaRepository,
   InMemoryTipoCargaRepository,
+  InMemoryUsuarioRepository,
 } from "../../../src/infrastructure/persistence/memory/InMemoryRepositories.js";
-import { PgCiudadRepository, PgEnvioRepository, PgRutaRepository, PgTipoCargaRepository } from "../../../src/infrastructure/persistence/postgres/PgRepositories.js";
+import { PgCiudadRepository, PgEnvioRepository, PgRutaRepository, PgTipoCargaRepository, PgUsuarioRepository } from "../../../src/infrastructure/persistence/postgres/PgRepositories.js";
 import { crearPool, type Db } from "../../../src/infrastructure/persistence/postgres/pool.js";
 import { InMemoryClienteRepository } from "../../../src/infrastructure/persistence/memory/InMemoryClienteRepository.js";
 import { PgClienteRepository } from "../../../src/infrastructure/persistence/postgres/PgClienteRepository.js";
@@ -26,6 +27,9 @@ contratoRepositorios("memoria", async () => {
     ciudades: new InMemoryCiudadRepository(ciudades),
     clientes: new InMemoryClienteRepository(),
     tiposCarga: new InMemoryTipoCargaRepository(),
+    usuarios: new InMemoryUsuarioRepository(
+      USUARIOS_SEED.map(({ password, ...u }) => ({ ...u, passwordHash: `hash:${password}`, activo: true })),
+    ),
   };
 });
 
@@ -51,13 +55,42 @@ describe.skipIf(!url)("PostgreSQL", () => {
     await db.query("DELETE FROM rutas WHERE origen_id > 4 OR destino_id > 4");
     await db.query("DELETE FROM ciudades WHERE id > 4");
     await db.query("UPDATE ciudades SET activa = TRUE");
+    // Los tests de perfil cambian nombre, correo y hash: se restauran los de la semilla.
+    for (const u of USUARIOS_SEED) {
+      await db.query("UPDATE usuarios SET nombre = $2, email = $3, password_hash = $4 WHERE id = $1", [u.id, u.nombre, u.email, `hash:${u.password}`]);
+    }
     return {
       envios: new PgEnvioRepository(db),
       rutas: new PgRutaRepository(db),
       ciudades: new PgCiudadRepository(db),
       clientes: new PgClienteRepository(db),
       tiposCarga: new PgTipoCargaRepository(db),
+      usuarios: new PgUsuarioRepository(db),
     };
+  });
+
+  it("migración 009: los envíos existentes quedan sin dirección ni evidencia, y las restricciones se cumplen", async () => {
+    await db.query("TRUNCATE envios, envio_items, historial_estados, clientes");
+    const id = "00000000-0000-4000-d000-000000000009";
+    await db.query(
+      `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,
+         destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, costo, forma_pago)
+       VALUES ($1, 9, 'Ana', '0991234567', 'Luis', '0987654321', 'Quito', 11, 1, 1, 3, 'PAGADO')`,
+      [id],
+    );
+    const e = (await new PgEnvioRepository(db).buscarPorNumeroGuia(9))!;
+    expect(e.toSnapshot().remitente.direccion).toBeNull();
+    expect(e.evidencia).toBeNull();
+    await expect(db.query("UPDATE envios SET remitente_direccion = repeat('x', 201) WHERE id = $1", [id])).rejects.toMatchObject({ code: "23514" });
+    // evidencia a medias (sin clave) o con un tipo no permitido
+    await expect(db.query("UPDATE envios SET evidencia_recibido_por = 'Rosa' WHERE id = $1", [id])).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      db.query(
+        `UPDATE envios SET evidencia_recibido_por = 'Rosa', evidencia_tipo = 'image/gif', evidencia_bytes = 1,
+           evidencia_subida_en = now(), evidencia_clave = 'k' WHERE id = $1`,
+        [id],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
   });
 });
 

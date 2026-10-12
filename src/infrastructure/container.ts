@@ -7,9 +7,16 @@ import type {
   TipoCargaRepository,
   UsuarioRepository,
 } from "../application/ports/repositories.js";
-import type { Clock, IdGenerator, PasswordHasher, TokenService } from "../application/ports/services.js";
+import type {
+  AlmacenArchivos,
+  Clock,
+  IdGenerator,
+  PasswordHasher,
+  TokenService,
+} from "../application/ports/services.js";
 import { Login } from "../application/use-cases/auth/Login.js";
 import { ObtenerPerfil } from "../application/use-cases/auth/ObtenerPerfil.js";
+import { ActualizarPerfil, CambiarContrasena } from "../application/use-cases/auth/Perfil.js";
 import {
   ActualizarCiudad,
   CrearCiudad,
@@ -33,6 +40,7 @@ import {
 } from "../application/use-cases/envios/ConsultasEnvio.js";
 import { CotizarEnvio } from "../application/use-cases/envios/CotizarEnvio.js";
 import { CrearEnvio } from "../application/use-cases/envios/CrearEnvio.js";
+import { ObtenerEvidencia, SubirEvidencia } from "../application/use-cases/envios/EvidenciaEntrega.js";
 import { ActualizarRuta, CrearRuta, ListarRutas } from "../application/use-cases/rutas/Rutas.js";
 import { MemoryCache, MemoryLimitadorTasa, SinCache } from "./cache/memoria.js";
 import {
@@ -66,6 +74,9 @@ import {
 import { crearPool, type Db } from "./persistence/postgres/pool.js";
 import { USUARIOS_SEED } from "./persistence/seed-data.js";
 import { BcryptPasswordHasher, JwtTokenService } from "./security/adapters.js";
+import { AlmacenDisco } from "./storage/AlmacenDisco.js";
+import { AlmacenMemoria } from "./storage/AlmacenMemoria.js";
+import { AlmacenR2 } from "./storage/AlmacenR2.js";
 import { CryptoIdGenerator, SystemClock } from "./system/adapters.js";
 
 export interface Adaptadores {
@@ -75,6 +86,8 @@ export interface Adaptadores {
   rutas: RutaRepository;
   envios: EnvioRepository;
   clientes: ClienteRepository;
+  /** Almacén privado de archivos (fotos de evidencia de entrega). */
+  almacen: AlmacenArchivos;
   hasher: PasswordHasher;
   tokens: TokenService;
   clock: Clock;
@@ -95,6 +108,9 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache()) {
     tokens: a.tokens,
     login: new Login(a.usuarios, a.hasher, a.tokens),
     perfil: new ObtenerPerfil(a.usuarios),
+    // Ninguna lectura cacheada muestra nombres de operadores: editar el perfil no invalida cachés.
+    actualizarPerfil: new ActualizarPerfil(a.usuarios, a.tokens),
+    cambiarContrasena: new CambiarContrasena(a.usuarios, a.hasher),
     listarCiudades: conCache(new ListarCiudades(a.ciudades), cache, {
       clave: (f) => claveCatalogo(`ciudades:${enCatalogo(f?.activa)}`),
       ttlSeg: TTL.catalogo,
@@ -130,6 +146,9 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache()) {
       ESPACIOS.dashboard,
       ESPACIOS.seguimiento,
     ]),
+    // La evidencia no aparece en el seguimiento público ni en el dashboard: no invalida cachés.
+    subirEvidencia: new SubirEvidencia(a.envios, rutas, a.almacen, a.ids, a.clock),
+    obtenerEvidencia: new ObtenerEvidencia(a.envios, a.almacen),
     seguimiento: conCache(new ConsultarSeguimiento(a.envios, rutas), cache, {
       clave: (guia) => `${ESPACIOS.seguimiento}${claveGuia(guia)}`,
       ttlSeg: TTL.seguimiento,
@@ -163,6 +182,7 @@ export async function adaptadoresEnMemoria(
     rutas: new InMemoryRutaRepository(ciudades),
     envios: new InMemoryEnvioRepository(),
     clientes: new InMemoryClienteRepository(),
+    almacen: new AlmacenMemoria(),
     hasher,
     tokens: new JwtTokenService(opciones.jwtSecret),
     clock: new SystemClock(),
@@ -171,7 +191,11 @@ export async function adaptadoresEnMemoria(
   };
 }
 
-export function adaptadoresPostgres(db: Db, config: Pick<Config, "JWT_SECRET" | "JWT_EXPIRES_IN">): Adaptadores {
+export function adaptadoresPostgres(
+  db: Db,
+  config: Pick<Config, "JWT_SECRET" | "JWT_EXPIRES_IN">,
+  almacen: AlmacenArchivos = new AlmacenMemoria(),
+): Adaptadores {
   return {
     usuarios: new PgUsuarioRepository(db),
     ciudades: new PgCiudadRepository(db),
@@ -179,6 +203,7 @@ export function adaptadoresPostgres(db: Db, config: Pick<Config, "JWT_SECRET" | 
     rutas: new PgRutaRepository(db),
     envios: new PgEnvioRepository(db),
     clientes: new PgClienteRepository(db),
+    almacen,
     hasher: new BcryptPasswordHasher(),
     tokens: new JwtTokenService(config.JWT_SECRET, config.JWT_EXPIRES_IN),
     clock: new SystemClock(),
@@ -207,17 +232,40 @@ export async function crearCacheYLimitador(config: Pick<Config, "CACHE_DRIVER" |
   return { cache, limitador: new MemoryLimitadorTasa(), cerrar: async () => {} };
 }
 
+/** Almacén de archivos según `STORAGE_DRIVER` (cargarConfig ya validó las credenciales de R2). */
+export function crearAlmacen(
+  config: Pick<
+    Config,
+    "STORAGE_DRIVER" | "STORAGE_LOCAL_DIR" | "R2_ACCOUNT_ID" | "R2_ACCESS_KEY_ID" | "R2_SECRET_ACCESS_KEY" | "R2_BUCKET"
+  >,
+): AlmacenArchivos {
+  switch (config.STORAGE_DRIVER) {
+    case "r2":
+      return AlmacenR2.desdeConfig({
+        accountId: config.R2_ACCOUNT_ID!,
+        accessKeyId: config.R2_ACCESS_KEY_ID!,
+        secretAccessKey: config.R2_SECRET_ACCESS_KEY!,
+        bucket: config.R2_BUCKET!,
+      });
+    case "local":
+      return new AlmacenDisco(config.STORAGE_LOCAL_DIR);
+    case "memory":
+      return new AlmacenMemoria();
+  }
+}
+
 export async function crearContenedor(
   config: Config,
 ): Promise<{ casos: CasosDeUso; limitador: LimitadorTasa; cerrar: () => Promise<void> }> {
   const { cache, limitador, cerrar: cerrarCache } = await crearCacheYLimitador(config);
+  const almacen = crearAlmacen(config);
   if (config.DB_DRIVER === "memory") {
-    const adaptadores = await adaptadoresEnMemoria({ jwtSecret: config.JWT_SECRET });
+    const adaptadores = await adaptadoresEnMemoria({ jwtSecret: config.JWT_SECRET, almacen });
     return { casos: crearCasosDeUso(adaptadores, cache), limitador, cerrar: cerrarCache };
   }
   const db = crearPool(config.DATABASE_URL);
   return {
-    casos: crearCasosDeUso(adaptadoresPostgres(db, config), cache),
+    casos: crearCasosDeUso(adaptadoresPostgres(db, config, almacen), cache),
     limitador,
     cerrar: async () => {
       await Promise.all([db.end(), cerrarCache()]);
