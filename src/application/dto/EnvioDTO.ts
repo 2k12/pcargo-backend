@@ -50,6 +50,10 @@ export interface EnvioDTO {
   /** PANEL o API (+ integración). */
   origen: OrigenEnvio;
   referenciaExterna: string | null;
+  /** v12 */
+  repartidor: { id: string; nombre: string } | null;
+  asignadoEn: string | null;
+  anonimizadoEn: string | null;
   creadoEn: string;
   actualizadoEn: string;
   historial?: EventoHistorialDTO[];
@@ -93,6 +97,9 @@ export function toEnvioDTO(envio: Envio, ruta: Ruta | undefined, conHistorial = 
     evidencia: s.evidencia ? toEvidenciaDTO(s.evidencia) : null,
     origen: envio.origen,
     referenciaExterna: envio.referenciaExterna,
+    repartidor: envio.repartidor,
+    asignadoEn: envio.asignadoEn?.toISOString() ?? null,
+    anonimizadoEn: envio.anonimizadoEn?.toISOString() ?? null,
     creadoEn: s.creadoEn.toISOString(),
     actualizadoEn: s.actualizadoEn.toISOString(),
     ...(conHistorial ? { historial: s.historial.map(toEventoDTO) } : {}),

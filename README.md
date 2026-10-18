@@ -17,7 +17,8 @@ pnpm dev                # http://localhost:3000/api
 pnpm dev:memory
 ```
 
-Usuarios semilla: `admin@pcargo.ec / Admin123!` (ADMIN) · `operador@pcargo.ec / Operador123!` (OPERADOR).
+Usuarios semilla: `admin@pcargo.ec / Admin123!` (ADMIN) · `operador@pcargo.ec / Operador123!` (OPERADOR) ·
+`repartidor@pcargo.ec / Repartidor123!` (REPARTIDOR) · `portal@pcargo.ec / Portal123!` (CLIENTE, cliente «Textiles Atuntaqui»).
 
 ## Modelo de datos
 

@@ -7,7 +7,8 @@ import { MAX_DIRECCION_REMITENTE } from "../../domain/envio/Envio.js";
 import { FORMAS_PAGO } from "../../domain/envio/FormaPago.js";
 import { MAX_CANTIDAD, MAX_ITEMS } from "../../domain/tarifa/calcularTarifa.js";
 import { ZONAS } from "../../domain/tarifa/Zona.js";
-import { NOMBRE_USUARIO } from "../../domain/usuario/Usuario.js";
+import { NOMBRE_USUARIO, ROLES } from "../../domain/usuario/Usuario.js";
+import { CANALES_SOLICITUD, RETENCION_MESES } from "../../domain/datos/DatosPersonales.js";
 import {
   ALCANCES,
   CANALES,
@@ -100,6 +101,11 @@ export const filtroEnviosSchema = z.object({
   clienteId: z.uuid("cliente inválido").optional(),
   canal: z.enum(CANALES).optional(),
   integracionId: z.uuid("integración inválida").optional(),
+  // v12: un id de repartidor, o "ninguno" para los envíos sin asignar
+  repartidorId: z
+    .union([z.literal("ninguno"), z.uuid("repartidor inválido")])
+    .optional()
+    .transform((v) => (v === "ninguno" ? null : v)),
   q: z.string().optional(),
 });
 
@@ -267,3 +273,107 @@ export const ordenArticulosSchema = z.strictObject({
     .max(500)
     .refine((ids) => new Set(ids).size === ids.length, "los ids no se pueden repetir"),
 });
+
+// ── v12: usuarios, reparto, caja, datos personales y portal ──────────────────
+// Forma y tipos; las reglas (política de contraseñas, CLIENTE con cliente, rangos) viven en el dominio.
+
+const booleanoQuery = z
+  .enum(["true", "false"])
+  .optional()
+  .transform((v) => (v === undefined ? undefined : v === "true"));
+
+export const filtroUsuariosSchema = z.object({
+  rol: z.enum(ROLES).optional(),
+  activo: booleanoQuery,
+});
+
+export const crearUsuarioSchema = z.strictObject({
+  nombre: z.string().max(200),
+  email: z.email("correo inválido"),
+  password: z.string().max(200),
+  rol: z.enum(ROLES),
+  clienteId: z.uuid("cliente inválido").nullish(),
+});
+
+// `clienteId` no se cambia por aquí (strict → 400).
+export const actualizarUsuarioSchema = z
+  .strictObject({
+    nombre: z.string().max(200).optional(),
+    email: z.email("correo inválido").optional(),
+    password: z.string().max(200).optional(),
+    rol: z.enum(ROLES).optional(),
+    activo: z.boolean().optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), "Debe enviar al menos un campo");
+
+export const crearAccesoPortalSchema = z.strictObject({
+  nombre: z.string().max(200),
+  email: z.email("correo inválido"),
+});
+
+export const asignarRepartidorSchema = z.strictObject({
+  envioIds: z
+    .array(z.uuid("id de envío inválido"))
+    .min(1, "indique al menos un envío")
+    .max(100, "máximo 100 envíos")
+    .refine((ids) => new Set(ids).size === ids.length, "los envíos no se pueden repetir"),
+  repartidorId: z.uuid("repartidor inválido").nullable(),
+});
+
+export const vistaRepartidorSchema = z.object({
+  vista: z.enum(["pendientes", "hoy"]).default("pendientes"),
+});
+
+export const cambioEstadoRepartidorSchema = z.object({
+  estado: z.enum(["EN_REPARTO", "ENTREGADO", "NO_ENTREGADO", "NOVEDAD"]),
+  nota: z.string().max(500).nullish(),
+});
+
+export const cierreCajaSchema = z.strictObject({
+  usuarioId: z.uuid("usuario inválido"),
+  montoEntregado: z
+    .number()
+    .min(0, "debe ser mayor o igual a 0")
+    .refine((n) => Math.abs(Math.round(n * 100) - n * 100) < 1e-6, "hasta 2 decimales"),
+  nota: z.string().max(300).nullish(),
+});
+
+export const filtroCierresSchema = z.object({
+  usuarioId: z.uuid("usuario inválido").optional(),
+  desde: z.string().optional(),
+  hasta: z.string().optional(),
+});
+
+export const politicaDatosSchema = z.strictObject({
+  mesesRetencion: z.number().int().min(RETENCION_MESES.min).max(RETENCION_MESES.max),
+});
+
+export const depurarDatosSchema = z.strictObject({ simular: z.boolean().optional() });
+
+export const titularSchema = z.object({ telefono: z.string().min(1, "obligatorio").max(40) });
+
+export const solicitudDatosSchema = z.strictObject({
+  telefono: z.string().max(40),
+  nombreTitular: z.string().max(200),
+  canal: z.enum(CANALES_SOLICITUD),
+  nota: z.string().max(300).nullish(),
+});
+
+export const filtroResumenPortalSchema = z.object({
+  desde: z.string().optional(),
+  hasta: z.string().optional(),
+});
+
+export const filtroEnviosPortalSchema = z.object({
+  estado: z.enum(ESTADOS).optional(),
+  q: z.string().optional(),
+});
+
+// El remitente es el cliente: remitente, clienteId, numeroGuia o una forma de pago no admitida → 400.
+export const crearEnvioPortalSchema = cotizacionSchema
+  .extend({
+    destinatario: z.object({ nombre: texto, telefono: texto, direccion: texto }),
+    formaPago: z.enum(["CONTRATO", "AL_COBRO"]).optional(),
+    descripcion: z.string().max(500).nullish(),
+  })
+  .strict();

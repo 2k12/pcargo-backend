@@ -5,6 +5,7 @@ import {
   type Adaptadores,
   type CasosDeUso,
 } from "../../../src/infrastructure/container.js";
+import { CLIENTES_SEED } from "../../../src/infrastructure/persistence/seed-data.js";
 import { ADMIN, FakeClock, hasherFalso, item, JWT_SECRET_TEST, OPERADOR, SecuenciaIds, solicitudEnvio } from "../../helpers/fakes.js";
 
 let c: CasosDeUso;
@@ -16,13 +17,15 @@ beforeEach(async () => {
   clock = new FakeClock();
   ids = new SecuenciaIds();
   a = await adaptadoresEnMemoria({ jwtSecret: JWT_SECRET_TEST, hasher: hasherFalso, clock, ids });
+  // Estos tests parten sin clientes frecuentes: se retira el cliente semilla del portal (v12).
+  await a.clientes.eliminar(CLIENTES_SEED[0]!.id);
   c = crearCasosDeUso(a);
 });
 
 describe("Login", () => {
   it("devuelve token y usuario con credenciales válidas", async () => {
     const r = await c.login.ejecutar("ADMIN@pcargo.ec ", "Admin123!");
-    expect(r.usuario).toEqual({ id: ADMIN.id, nombre: ADMIN.nombre, email: "admin@pcargo.ec", rol: "ADMIN" });
+    expect(r.usuario).toEqual({ id: ADMIN.id, nombre: ADMIN.nombre, email: "admin@pcargo.ec", rol: "ADMIN", clienteId: null });
     expect(c.tokens.verificar(r.token)).toEqual(ADMIN);
   });
 
@@ -226,7 +229,7 @@ describe("Clientes frecuentes", () => {
       envios: 0,
       monto: 0,
     });
-    await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991112233", consentimiento: true });
+    await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991113344", consentimiento: true });
 
     expect((await c.listarClientes.ejecutar()).map((x) => x.nombre)).toEqual(["Ana López", "Ferretería Imbabura"]);
     expect((await c.listarClientes.ejecutar({ q: "ferre" })).map((x) => x.id)).toEqual([a.id]);
@@ -241,13 +244,13 @@ describe("Clientes frecuentes", () => {
   });
 
   it("no admite dos clientes con el mismo teléfono ni datos inválidos", async () => {
-    const a = await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991112233", consentimiento: true });
+    const a = await c.crearCliente.ejecutar({ nombre: "Ana López", telefono: "0991113344", consentimiento: true });
     const b = await c.crearCliente.ejecutar({ nombre: "Luis Mora", telefono: "0994445566", consentimiento: true });
     const conflicto = { code: "CONFLICTO" };
-    await expect(c.crearCliente.ejecutar({ nombre: "Otra Ana", telefono: "099 111 2233", consentimiento: true })).rejects.toMatchObject(conflicto);
-    await expect(c.actualizarCliente.ejecutar(b.id, { telefono: "0991112233" })).rejects.toMatchObject(conflicto);
-    await expect(c.actualizarCliente.ejecutar(a.id, { telefono: "099 111 2233" })).resolves.toMatchObject({
-      telefono: "099 111 2233",
+    await expect(c.crearCliente.ejecutar({ nombre: "Otra Ana", telefono: "099 111 3344", consentimiento: true })).rejects.toMatchObject(conflicto);
+    await expect(c.actualizarCliente.ejecutar(b.id, { telefono: "0991113344" })).rejects.toMatchObject(conflicto);
+    await expect(c.actualizarCliente.ejecutar(a.id, { telefono: "099 111 3344" })).resolves.toMatchObject({
+      telefono: "099 111 3344",
     });
     const invalido = { code: "VALIDACION" };
     await expect(c.crearCliente.ejecutar({ nombre: "X", telefono: "0991112299", consentimiento: true })).rejects.toMatchObject(invalido);
@@ -291,7 +294,7 @@ describe("Clientes frecuentes", () => {
 });
 
 describe("Consentimiento de datos personales (LOPDP)", () => {
-  const ANA = { nombre: "Ana López", telefono: "0991112233" };
+  const ANA = { nombre: "Ana López", telefono: "0991113344" };
   const MENSAJE = "Se necesita el consentimiento del cliente para guardar sus datos";
 
   it("no guarda un cliente sin consentimiento expreso", async () => {

@@ -25,7 +25,9 @@ export type ErrorCode =
   /** Falta configuración del servidor para la operación (p. ej. la clave de cifrado de los webhooks). */
   | "SERVICIO_NO_CONFIGURADO"
   /** Tipo de carga desactivado por el ADMIN: no se puede cotizar ni usar en envíos nuevos (v11). */
-  | "TIPO_CARGA_INACTIVO";
+  | "TIPO_CARGA_INACTIVO"
+  /** Cierre de caja de una persona sin cobros pendientes (v12). */
+  | "SIN_COBROS";
 
 export interface OpcionesDomainError {
   /**

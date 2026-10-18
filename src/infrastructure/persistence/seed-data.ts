@@ -1,5 +1,6 @@
 import type { TipoCarga, TipoCargaPublico } from "../../domain/carga/TipoCarga.js";
 import type { ArticuloRestringido } from "../../domain/catalogo/ArticuloRestringido.js";
+import type { Cliente } from "../../domain/cliente/Cliente.js";
 import type { Ciudad } from "../../domain/ruta/Ruta.js";
 import type { Rol } from "../../domain/usuario/Usuario.js";
 
@@ -117,13 +118,37 @@ export const RUTAS_SEED = [
   tiempoEstimadoMin: tiempoEstimadoMin!,
 }));
 
-export const USUARIOS_SEED: { id: string; nombre: string; email: string; password: string; rol: Rol }[] = [
+/** Cliente frecuente semilla (v12): la empresa del usuario del portal. Tiene consentimiento registrado (LOPDP). */
+export const CLIENTES_SEED: readonly Cliente[] = [
+  {
+    id: "00000000-0000-4000-8012-000000000001",
+    nombre: "Textiles Atuntaqui",
+    telefono: "0991112233",
+    direccion: "Av. Julio Miguel Aguinaga y Olmedo, Atuntaqui",
+    notas: null,
+    creadoEn: new Date("2026-10-18T00:00:00.000Z"),
+    consentimientoEn: new Date("2026-10-18T00:00:00.000Z"),
+  },
+];
+
+export interface UsuarioSemilla {
+  id: string;
+  nombre: string;
+  email: string;
+  password: string;
+  rol: Rol;
+  /** Solo CLIENTE: cliente semilla vinculado. */
+  clienteId: string | null;
+}
+
+export const USUARIOS_SEED: readonly UsuarioSemilla[] = [
   {
     id: "00000000-0000-4000-8000-000000000001",
     nombre: "Administrador PCargo",
     email: "admin@pcargo.ec",
     password: "Admin123!",
     rol: "ADMIN",
+    clienteId: null,
   },
   {
     id: "00000000-0000-4000-8000-000000000002",
@@ -131,5 +156,22 @@ export const USUARIOS_SEED: { id: string; nombre: string; email: string; passwor
     email: "operador@pcargo.ec",
     password: "Operador123!",
     rol: "OPERADOR",
+    clienteId: null,
+  },
+  {
+    id: "00000000-0000-4000-8000-000000000003",
+    nombre: "Repartidor Ibarra",
+    email: "repartidor@pcargo.ec",
+    password: "Repartidor123!",
+    rol: "REPARTIDOR",
+    clienteId: null,
+  },
+  {
+    id: "00000000-0000-4000-8000-000000000004",
+    nombre: "Portal Textiles Atuntaqui",
+    email: "portal@pcargo.ec",
+    password: "Portal123!",
+    rol: "CLIENTE",
+    clienteId: CLIENTES_SEED[0]!.id,
   },
 ];

@@ -39,6 +39,7 @@ describe("PATCH /auth/me", () => {
       nombre: "Paola Ruiz",
       email: "paola.ruiz@pcargo.ec",
       rol: "OPERADOR",
+      clienteId: null,
     });
     // el token nuevo funciona y su nombre queda como operador de los envíos que registra
     const creado = await request(app).post("/api/envios").set(auth(r.body.token)).send(solicitudEnvio()).expect(201);

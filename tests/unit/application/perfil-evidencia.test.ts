@@ -23,7 +23,7 @@ beforeEach(async () => {
 describe("ActualizarPerfil", () => {
   it("cambia nombre y correo (en minúsculas) y devuelve un token con el nombre nuevo", async () => {
     const r = await c.actualizarPerfil.ejecutar(OPERADOR, { nombre: "  Paola  Ruiz ", email: "Paola@PCargo.ec" });
-    expect(r.usuario).toEqual({ id: OPERADOR.id, nombre: "Paola Ruiz", email: "paola@pcargo.ec", rol: "OPERADOR" });
+    expect(r.usuario).toEqual({ id: OPERADOR.id, nombre: "Paola Ruiz", email: "paola@pcargo.ec", rol: "OPERADOR", clienteId: null });
     expect(c.tokens.verificar(r.token)).toEqual({ id: OPERADOR.id, nombre: "Paola Ruiz", rol: "OPERADOR" });
     expect(await c.perfil.ejecutar(OPERADOR)).toEqual(r.usuario);
     // con el correo nuevo se inicia sesión; con el viejo ya no

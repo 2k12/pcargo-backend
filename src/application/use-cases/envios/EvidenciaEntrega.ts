@@ -4,6 +4,8 @@ import {
   validarFotoEvidencia,
   type TipoImagen,
 } from "../../../domain/envio/Evidencia.js";
+import type { Envio } from "../../../domain/envio/Envio.js";
+import type { Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, type EnvioDTO } from "../../dto/EnvioDTO.js";
@@ -18,7 +20,7 @@ export interface SolicitudEvidencia {
 }
 
 /** Borra sin propagar errores: un archivo huérfano no debe tumbar una operación que ya se completó. */
-async function eliminarSinFallar(almacen: AlmacenArchivos, clave: string): Promise<void> {
+export async function eliminarSinFallar(almacen: AlmacenArchivos, clave: string): Promise<void> {
   try {
     await almacen.eliminar(clave);
   } catch (e) {
@@ -41,8 +43,21 @@ export class SubirEvidencia {
   ) {}
 
   async ejecutar(actor: Actor, envioId: string, s: SolicitudEvidencia): Promise<EnvioDTO> {
+    const { envio, ruta } = await this.subir(actor, envioId, s);
+    return toEnvioDTO(envio, ruta, true);
+  }
+
+  /** Lógica común del panel y de la app del repartidor (`repartidorId`: solo sus envíos asignados, si no 404). */
+  async subir(
+    actor: Actor,
+    envioId: string,
+    s: SolicitudEvidencia,
+    opciones: { repartidorId?: string } = {},
+  ): Promise<{ envio: Envio; ruta: Ruta | undefined }> {
     const envio = await this.envios.buscarPorId(envioId);
-    if (!envio) throw new DomainError("NO_ENCONTRADO", "Envío no encontrado");
+    if (!envio || (opciones.repartidorId !== undefined && envio.repartidor?.id !== opciones.repartidorId)) {
+      throw new DomainError("NO_ENCONTRADO", "Envío no encontrado");
+    }
     const tipo = validarFotoEvidencia(s.foto);
     const recibidoPor = normalizarRecibidoPor(s.recibidoPor);
     const foto = s.foto!;
@@ -63,7 +78,7 @@ export class SubirEvidencia {
       throw e;
     }
     if (anterior && anterior.clave !== clave) await eliminarSinFallar(this.almacen, anterior.clave);
-    return toEnvioDTO(envio, ruta, true);
+    return { envio, ruta };
   }
 }
 

@@ -20,6 +20,10 @@ import { crearPool, type Db } from "../../../src/infrastructure/persistence/post
 import { InMemoryClienteRepository } from "../../../src/infrastructure/persistence/memory/InMemoryClienteRepository.js";
 import { PgClienteRepository } from "../../../src/infrastructure/persistence/postgres/PgClienteRepository.js";
 import { contratoRepositorios } from "../../helpers/contrato-repositorios.js";
+import { InMemoryCajaRepository } from "../../../src/infrastructure/persistence/memory/InMemoryCaja.js";
+import { InMemoryDatosPersonalesRepository } from "../../../src/infrastructure/persistence/memory/InMemoryDatosPersonales.js";
+import { PgCajaRepository } from "../../../src/infrastructure/persistence/postgres/PgCaja.js";
+import { PgDatosPersonalesRepository } from "../../../src/infrastructure/persistence/postgres/PgDatosPersonales.js";
 import {
   InMemoryEntregaWebhookRepository,
   InMemoryIdempotenciaRepository,
@@ -43,7 +47,17 @@ contratoRepositorios("memoria", async () => {
     solicitudesApi.eliminarDeIntegracion(id);
     idempotencia.eliminarDeIntegracion(id);
   });
-  const envios = new InMemoryEnvioRepository({ outbox: entregasWebhook, nombreIntegracion: integraciones.nombre });
+  // Como en Postgres tras reiniciar: usuarios semilla sin cliente vinculado (el contrato parte sin clientes).
+  const usuarios = new InMemoryUsuarioRepository(
+    USUARIOS_SEED.map(({ password, ...u }) => ({ ...u, clienteId: null, passwordHash: `hash:${password}`, activo: true })),
+  );
+  const caja = new InMemoryCajaRepository(usuarios.nombre);
+  const envios = new InMemoryEnvioRepository({
+    outbox: entregasWebhook,
+    nombreIntegracion: integraciones.nombre,
+    caja,
+    nombreUsuario: usuarios.nombre,
+  });
   return {
     integraciones,
     entregasWebhook,
@@ -52,12 +66,12 @@ contratoRepositorios("memoria", async () => {
     envios,
     rutas: new InMemoryRutaRepository(ciudades),
     ciudades: new InMemoryCiudadRepository(ciudades),
-    clientes: new InMemoryClienteRepository(),
+    clientes: new InMemoryClienteRepository([], { alEliminar: (id) => usuarios.desvincularCliente(id) }),
     tiposCarga: new InMemoryTipoCargaRepository(undefined, { usaTipoCarga: (c) => envios.usaTipoCarga(c) }),
     articulos: new InMemoryArticuloRestringidoRepository(),
-    usuarios: new InMemoryUsuarioRepository(
-      USUARIOS_SEED.map(({ password, ...u }) => ({ ...u, passwordHash: `hash:${password}`, activo: true })),
-    ),
+    usuarios,
+    caja,
+    datosPersonales: new InMemoryDatosPersonalesRepository(),
   };
 });
 
@@ -82,9 +96,14 @@ describe.skipIf(!url)("PostgreSQL", () => {
   });
 
   contratoRepositorios("postgres", async () => {
+    // v12: usuarios.cliente_id referencia clientes, así que TRUNCATE clientes CASCADE vaciaría los usuarios: los
+    // clientes se borran con DELETE (los usuarios quedan sin cliente) y los usuarios extra de los tests, aparte.
     await db.query(
-      "TRUNCATE envios, envio_items, historial_estados, clientes, integraciones, api_keys, api_idempotencia, api_solicitudes, webhook_entregas CASCADE",
+      `TRUNCATE envios, envio_items, historial_estados, integraciones, api_keys, api_idempotencia, api_solicitudes,
+         webhook_entregas, cobros, cierres_caja, solicitudes_datos, configuracion CASCADE`,
     );
+    await db.query("DELETE FROM usuarios WHERE NOT (id = ANY($1::uuid[]))", [USUARIOS_SEED.map((u) => u.id)]);
+    await db.query("DELETE FROM clientes");
     await db.query("DELETE FROM rutas WHERE origen_id > 4 OR destino_id > 4");
     await db.query("DELETE FROM ciudades WHERE id > 4");
     await db.query("UPDATE ciudades SET activa = TRUE");
@@ -99,9 +118,13 @@ describe.skipIf(!url)("PostgreSQL", () => {
       );
     }
     for (const a of ARTICULOS_SEED) await new PgArticuloRestringidoRepository(db).crear(a);
-    // Los tests de perfil cambian nombre, correo y hash: se restauran los de la semilla.
+    // Los tests de perfil y usuarios cambian nombre, correo, hash, rol y estado: se restauran los de la semilla
+    // (sin cliente vinculado: el contrato parte sin clientes).
     for (const u of USUARIOS_SEED) {
-      await db.query("UPDATE usuarios SET nombre = $2, email = $3, password_hash = $4 WHERE id = $1", [u.id, u.nombre, u.email, `hash:${u.password}`]);
+      await db.query(
+        "UPDATE usuarios SET nombre = $2, email = $3, password_hash = $4, rol = $5, activo = TRUE, cliente_id = NULL WHERE id = $1",
+        [u.id, u.nombre, u.email, `hash:${u.password}`, u.rol],
+      );
     }
     return {
       envios: new PgEnvioRepository(db),
@@ -115,6 +138,8 @@ describe.skipIf(!url)("PostgreSQL", () => {
       entregasWebhook: new PgEntregaWebhookRepository(db),
       solicitudesApi: new PgSolicitudApiRepository(db),
       idempotencia: new PgIdempotenciaRepository(db),
+      caja: new PgCajaRepository(db),
+      datosPersonales: new PgDatosPersonalesRepository(db),
     };
   });
 
@@ -152,8 +177,27 @@ describe.skipIf(!url)("PostgreSQL", () => {
     expect((await new PgArticuloRestringidoRepository(db).listar()).some((a) => a.categoria === "NOTA")).toBe(false);
   });
 
+  it("semilla v12: cliente «Textiles Atuntaqui» con consentimiento, repartidor y portal vinculado; idempotente", async () => {
+    await db.query("DELETE FROM usuarios WHERE email IN ('repartidor@pcargo.ec', 'portal@pcargo.ec')");
+    await sembrar(db, 4);
+    await sembrar(db, 4);
+    const { rows: clientes } = await db.query("SELECT id, nombre, consentimiento_en FROM clientes WHERE telefono = '0991112233'");
+    expect(clientes).toHaveLength(1);
+    expect(clientes[0]).toMatchObject({ nombre: "Textiles Atuntaqui", consentimiento_en: expect.any(Date) });
+    const usuarios = new PgUsuarioRepository(db);
+    expect(await usuarios.buscarPorEmail("repartidor@pcargo.ec")).toMatchObject({ rol: "REPARTIDOR", clienteId: null, activo: true });
+    expect(await usuarios.buscarPorEmail("portal@pcargo.ec")).toMatchObject({ rol: "CLIENTE", clienteId: clientes[0].id, activo: true });
+    expect((await db.query("SELECT count(*)::int AS n FROM usuarios WHERE email LIKE '%@pcargo.ec'")).rows[0].n).toBe(4);
+    // restricciones: rol válido y cliente solo en usuarios CLIENTE
+    await expect(db.query("UPDATE usuarios SET rol = 'JEFE' WHERE email = 'admin@pcargo.ec'")).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      db.query("UPDATE usuarios SET cliente_id = $1 WHERE email = 'admin@pcargo.ec'", [clientes[0].id]),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
   it("migración 009: los envíos existentes quedan sin dirección ni evidencia, y las restricciones se cumplen", async () => {
-    await db.query("TRUNCATE envios, envio_items, historial_estados, clientes CASCADE");
+    await db.query("TRUNCATE envios, envio_items, historial_estados CASCADE");
+    await db.query("DELETE FROM clientes");
     const id = "00000000-0000-4000-d000-000000000009";
     await db.query(
       `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,

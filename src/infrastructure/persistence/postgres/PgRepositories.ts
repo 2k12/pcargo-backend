@@ -1,4 +1,6 @@
 import type {
+  CambiosUsuarioRepo,
+  FiltroUsuarios,
   CambiosCiudad,
   CambiosRuta,
   CiudadRepository,
@@ -19,36 +21,43 @@ import type { EvidenciaEntrega, TipoImagen } from "../../../domain/envio/Evidenc
 import type { FormaPago } from "../../../domain/envio/FormaPago.js";
 import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
 import type { Zona } from "../../../domain/tarifa/Zona.js";
-import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
+import type { CambiosPerfil, Usuario, UsuarioAdmin, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
+import type { MovimientosCaja } from "../../../domain/caja/Caja.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import { insertarEntregas } from "./PgIntegraciones.js";
 import type pg from "pg";
 import type { Db } from "./pool.js";
+
+const COLUMNAS_USUARIO = `id, nombre, email, rol, cliente_id AS "clienteId"`;
+const COLUMNAS_ADMIN = `${COLUMNAS_USUARIO}, activo, creado_en AS "creadoEn"`;
+
+/** Correo repetido en una carrera: decide la restricción UNIQUE. */
+function traducirCorreoRepetido(e: unknown): never {
+  if ((e as { code?: string }).code === "23505") {
+    throw new DomainError("CONFLICTO", "Ese correo ya está registrado por otro usuario");
+  }
+  throw e;
+}
 
 export class PgUsuarioRepository implements UsuarioRepository {
   constructor(private readonly db: Db) {}
 
   async buscarPorEmail(email: string): Promise<UsuarioConCredenciales | null> {
     const { rows } = await this.db.query(
-      `SELECT id, nombre, email, rol, password_hash AS "passwordHash", activo
-         FROM usuarios WHERE email = $1`,
+      `SELECT ${COLUMNAS_USUARIO}, password_hash AS "passwordHash", activo FROM usuarios WHERE email = $1`,
       [email],
     );
     return rows[0] ?? null;
   }
 
   async buscarPorId(id: string): Promise<Usuario | null> {
-    const { rows } = await this.db.query(
-      "SELECT id, nombre, email, rol FROM usuarios WHERE id = $1 AND activo",
-      [id],
-    );
+    const { rows } = await this.db.query(`SELECT ${COLUMNAS_USUARIO} FROM usuarios WHERE id = $1 AND activo`, [id]);
     return rows[0] ?? null;
   }
 
   async buscarCredencialesPorId(id: string): Promise<UsuarioConCredenciales | null> {
     const { rows } = await this.db.query(
-      `SELECT id, nombre, email, rol, password_hash AS "passwordHash", activo
-         FROM usuarios WHERE id = $1 AND activo`,
+      `SELECT ${COLUMNAS_USUARIO}, password_hash AS "passwordHash", activo FROM usuarios WHERE id = $1 AND activo`,
       [id],
     );
     return rows[0] ?? null;
@@ -63,24 +72,68 @@ export class PgUsuarioRepository implements UsuarioRepository {
   }
 
   async actualizarPerfil(id: string, c: CambiosPerfil): Promise<Usuario> {
-    try {
-      const { rows } = await this.db.query<Usuario>(
+    const { rows } = await this.db
+      .query<Usuario>(
         `UPDATE usuarios SET nombre = COALESCE($2, nombre), email = COALESCE($3, email)
-          WHERE id = $1 RETURNING id, nombre, email, rol`,
+          WHERE id = $1 RETURNING ${COLUMNAS_USUARIO}`,
         [id, c.nombre ?? null, c.email ?? null],
-      );
-      return rows[0]!;
-    } catch (e) {
-      // Dos usuarios tomando el mismo correo a la vez: decide la restricción UNIQUE.
-      if ((e as { code?: string }).code === "23505") {
-        throw new DomainError("CONFLICTO", "Ese correo ya está registrado por otro usuario");
-      }
-      throw e;
-    }
+      )
+      .catch(traducirCorreoRepetido);
+    return rows[0]!;
   }
 
   async actualizarPasswordHash(id: string, passwordHash: string): Promise<void> {
     await this.db.query("UPDATE usuarios SET password_hash = $2 WHERE id = $1", [id, passwordHash]);
+  }
+
+  async listar(f: FiltroUsuarios = {}): Promise<UsuarioAdmin[]> {
+    const cond: string[] = [];
+    const params: unknown[] = [];
+    if (f.rol) cond.push(`rol = $${params.push(f.rol)}`);
+    if (f.activo !== undefined) cond.push(`activo = $${params.push(f.activo)}`);
+    if (f.clienteId) cond.push(`cliente_id = $${params.push(f.clienteId)}`);
+    const where = cond.length ? `WHERE ${cond.join(" AND ")}` : "";
+    const { rows } = await this.db.query<UsuarioAdmin>(
+      `SELECT ${COLUMNAS_ADMIN} FROM usuarios ${where} ORDER BY lower(nombre), id`,
+      params,
+    );
+    return rows;
+  }
+
+  async obtener(id: string): Promise<UsuarioAdmin | null> {
+    const { rows } = await this.db.query<UsuarioAdmin>(`SELECT ${COLUMNAS_ADMIN} FROM usuarios WHERE id = $1`, [id]);
+    return rows[0] ?? null;
+  }
+
+  async crear(u: UsuarioAdmin & { passwordHash: string }): Promise<void> {
+    await this.db
+      .query(
+        `INSERT INTO usuarios (id, nombre, email, password_hash, rol, activo, creado_en, cliente_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [u.id, u.nombre, u.email, u.passwordHash, u.rol, u.activo, u.creadoEn, u.clienteId],
+      )
+      .catch(traducirCorreoRepetido);
+  }
+
+  async actualizar(id: string, c: CambiosUsuarioRepo): Promise<UsuarioAdmin> {
+    const { rows } = await this.db
+      .query<UsuarioAdmin>(
+        `UPDATE usuarios SET nombre = COALESCE($2, nombre), email = COALESCE($3, email), rol = COALESCE($4, rol),
+                activo = COALESCE($5, activo), password_hash = COALESCE($6, password_hash)
+          WHERE id = $1 RETURNING ${COLUMNAS_ADMIN}`,
+        [id, c.nombre ?? null, c.email ?? null, c.rol ?? null, c.activo ?? null, c.passwordHash ?? null],
+      )
+      .catch(traducirCorreoRepetido);
+    if (!rows[0]) throw new DomainError("NO_ENCONTRADO", "Usuario no encontrado");
+    return rows[0];
+  }
+
+  async accesosPortalPorCliente(): Promise<Map<string, number>> {
+    const { rows } = await this.db.query<{ id: string; n: number }>(
+      `SELECT cliente_id AS id, count(*)::int AS n FROM usuarios
+        WHERE rol = 'CLIENTE' AND activo AND cliente_id IS NOT NULL GROUP BY cliente_id`,
+    );
+    return new Map(rows.map((r) => [r.id, r.n]));
   }
 }
 
@@ -437,6 +490,10 @@ interface EnvioRow {
   integracion_id: string | null;
   integracion_nombre: string | null;
   referencia_externa: string | null;
+  repartidor_id: string | null;
+  repartidor_nombre: string | null;
+  asignado_en: Date | null;
+  anonimizado_en: Date | null;
 }
 
 const aEvidencia = (r: EnvioRow): EvidenciaEntrega | null =>
@@ -452,6 +509,29 @@ const aEvidencia = (r: EnvioRow): EvidenciaEntrega | null =>
         clave: r.evidencia_clave,
       }
     : null;
+
+/**
+ * Cobros del envío en su misma transacción. Una anulación borra el cobro ORIGEN si sigue pendiente; si otro proceso ya
+ * lo cerró (el UPDATE del cierre lo bloquea hasta confirmar), registra la devolución en su lugar.
+ */
+async function aplicarMovimientosCaja(client: Pick<pg.PoolClient, "query">, m: MovimientosCaja | undefined): Promise<void> {
+  if (!m) return;
+  const insertar = async (c: MovimientosCaja["cobros"][number]) => {
+    await client.query(
+      `INSERT INTO cobros (id, tipo, monto, envio_id, numero_guia, forma_pago, usuario_id, fecha, cierre_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
+      [c.id, c.tipo, c.monto, c.envioId, c.numeroGuia, c.formaPago, c.usuario.id, c.fecha],
+    );
+  };
+  for (const c of m.cobros) await insertar(c);
+  for (const a of m.anulaciones) {
+    const { rowCount } = await client.query("DELETE FROM cobros WHERE id = $1 AND cierre_id IS NULL", [a.cobroId]);
+    if (!rowCount) {
+      const { rowCount: existe } = await client.query("SELECT 1 FROM cobros WHERE id = $1", [a.cobroId]);
+      if (existe) await insertar(a.siYaCerrado);
+    }
+  }
+}
 
 interface ItemRow {
   envio_id: string;
@@ -481,18 +561,34 @@ export class PgEnvioRepository implements EnvioRepository {
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
-      const upsert = await client.query<{ nuevo: boolean }>(
+      const upsert = await client.query<{ nuevo: boolean; anonimizado_en: Date | null }>(
         `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,
             destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, descripcion,
             costo, forma_pago, estado, creado_por, creado_en, actualizado_en, cliente_id, zona,
             remitente_direccion, evidencia_recibido_por, evidencia_tipo, evidencia_bytes, evidencia_subida_en,
-            evidencia_subida_por, evidencia_clave, integracion_id, referencia_externa)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+            evidencia_subida_por, evidencia_clave, integracion_id, referencia_externa, anonimizado_en)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
          ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en,
             evidencia_recibido_por = EXCLUDED.evidencia_recibido_por, evidencia_tipo = EXCLUDED.evidencia_tipo,
             evidencia_bytes = EXCLUDED.evidencia_bytes, evidencia_subida_en = EXCLUDED.evidencia_subida_en,
-            evidencia_subida_por = EXCLUDED.evidencia_subida_por, evidencia_clave = EXCLUDED.evidencia_clave
-         RETURNING (xmax = 0) AS nuevo`,
+            evidencia_subida_por = EXCLUDED.evidencia_subida_por, evidencia_clave = EXCLUDED.evidencia_clave,
+            -- Los datos personales solo cambian al anonimizar (y una vez anonimizados no vuelven).
+            remitente_nombre = CASE WHEN envios.anonimizado_en IS NULL AND EXCLUDED.anonimizado_en IS NOT NULL
+              THEN EXCLUDED.remitente_nombre ELSE envios.remitente_nombre END,
+            remitente_telefono = CASE WHEN envios.anonimizado_en IS NULL AND EXCLUDED.anonimizado_en IS NOT NULL
+              THEN EXCLUDED.remitente_telefono ELSE envios.remitente_telefono END,
+            remitente_direccion = CASE WHEN envios.anonimizado_en IS NULL AND EXCLUDED.anonimizado_en IS NOT NULL
+              THEN EXCLUDED.remitente_direccion ELSE envios.remitente_direccion END,
+            destinatario_nombre = CASE WHEN envios.anonimizado_en IS NULL AND EXCLUDED.anonimizado_en IS NOT NULL
+              THEN EXCLUDED.destinatario_nombre ELSE envios.destinatario_nombre END,
+            destinatario_telefono = CASE WHEN envios.anonimizado_en IS NULL AND EXCLUDED.anonimizado_en IS NOT NULL
+              THEN EXCLUDED.destinatario_telefono ELSE envios.destinatario_telefono END,
+            destinatario_direccion = CASE WHEN envios.anonimizado_en IS NULL AND EXCLUDED.anonimizado_en IS NOT NULL
+              THEN EXCLUDED.destinatario_direccion ELSE envios.destinatario_direccion END,
+            descripcion = CASE WHEN envios.anonimizado_en IS NULL AND EXCLUDED.anonimizado_en IS NOT NULL
+              THEN EXCLUDED.descripcion ELSE envios.descripcion END,
+            anonimizado_en = COALESCE(envios.anonimizado_en, EXCLUDED.anonimizado_en)
+         RETURNING (xmax = 0) AS nuevo, anonimizado_en`,
         [
           s.id, s.numeroGuia, s.remitente.nombre, s.remitente.telefono, s.destinatario.nombre,
           s.destinatario.telefono, s.destinatario.direccion, s.rutaId, envio.totalPiezas, envio.pesoTotalKg,
@@ -500,6 +596,7 @@ export class PgEnvioRepository implements EnvioRepository {
           s.clienteId ?? null, s.zona, s.remitente.direccion,
           ev?.recibidoPor ?? null, ev?.tipo ?? null, ev?.bytes ?? null, ev?.subidaEn ?? null,
           ev?.subidaPor?.id ?? null, ev?.clave ?? null, s.integracionId ?? null, s.referenciaExterna ?? null,
+          s.anonimizadoEn ?? null,
         ],
       );
       if (upsert.rows[0]?.nuevo) {
@@ -521,8 +618,14 @@ export class PgEnvioRepository implements EnvioRepository {
           [s.id, ev.estado, ev.nota, ev.usuario?.id ?? null, ev.fecha],
         );
       }
+      // Anonimizado (v12): las notas del historial también son datos personales.
+      if (upsert.rows[0]?.anonimizado_en) {
+        await client.query("UPDATE historial_estados SET nota = NULL WHERE envio_id = $1 AND nota IS NOT NULL", [s.id]);
+      }
       // Outbox: los webhooks quedan encolados solo si el cambio del envío se confirma.
       await insertarEntregas(client, opciones.webhooks ?? []);
+      // Caja: los cobros se registran solo si el cambio del envío se confirma.
+      await aplicarMovimientosCaja(client, opciones.caja);
       await client.query("COMMIT");
     } catch (e) {
       await client.query("ROLLBACK");
@@ -533,6 +636,38 @@ export class PgEnvioRepository implements EnvioRepository {
       if ((e as { code?: string; constraint?: string }).code === "23505" && (e as { constraint?: string }).constraint === "envios_integracion_referencia_key") {
         throw new DomainError("CONFLICTO", `Ya existe un envío con la referencia ${s.referenciaExterna}`);
       }
+      if ((e as { constraint?: string }).constraint === "cobros_envio_tipo_key") {
+        throw new DomainError("CONFLICTO", "El envío ya tiene ese cobro registrado");
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async asignarRepartidor(envioIds: string[], repartidorId: string | null, fecha: Date): Promise<number> {
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      // Bloquea los envíos: un cambio de estado concurrente espera y la comprobación se hace sobre lo vigente.
+      const { rows } = await client.query<{ id: string; estado: EstadoEnvio; numero_guia: number }>(
+        "SELECT id, estado, numero_guia FROM envios WHERE id = ANY($1::uuid[]) FOR UPDATE",
+        [envioIds],
+      );
+      const faltante = envioIds.find((id) => !rows.some((r) => r.id === id));
+      if (faltante) throw new DomainError("NO_ENCONTRADO", `Envío no encontrado: ${faltante}`);
+      const final = rows.find((r) => r.estado === "ENTREGADO" || r.estado === "CANCELADO");
+      if (final) {
+        throw new DomainError("ESTADO_INVALIDO", `La guía ${final.numero_guia} está ${final.estado}: no se puede asignar`);
+      }
+      const { rowCount } = await client.query(
+        "UPDATE envios SET repartidor_id = $2, asignado_en = $3 WHERE id = ANY($1::uuid[])",
+        [envioIds, repartidorId, repartidorId ? fecha : null],
+      );
+      await client.query("COMMIT");
+      return rowCount ?? 0;
+    } catch (e) {
+      await client.query("ROLLBACK");
       throw e;
     } finally {
       client.release();
@@ -597,6 +732,18 @@ export class PgEnvioRepository implements EnvioRepository {
     if (f.clienteId) cond.push(`e.cliente_id = $${params.push(f.clienteId)}`);
     if (f.canal) cond.push(f.canal === "API" ? "e.integracion_id IS NOT NULL" : "e.integracion_id IS NULL");
     if (f.integracionId) cond.push(`e.integracion_id = $${params.push(f.integracionId)}`);
+    if (f.repartidorId === null) cond.push("e.repartidor_id IS NULL");
+    else if (f.repartidorId) cond.push(`e.repartidor_id = $${params.push(f.repartidorId)}`);
+    if (f.estados) cond.push(`e.estado::text = ANY($${params.push(f.estados)}::text[])`);
+    if (f.actualizadoDesde) cond.push(`e.actualizado_en >= $${params.push(f.actualizadoDesde)}`);
+    if (f.actualizadoAntes) cond.push(`e.actualizado_en < $${params.push(f.actualizadoAntes)}`);
+    if (f.anonimizado !== undefined) cond.push(f.anonimizado ? "e.anonimizado_en IS NOT NULL" : "e.anonimizado_en IS NULL");
+    if (f.telefono) {
+      const i = params.push(f.telefono);
+      cond.push(
+        `(regexp_replace(e.remitente_telefono, '[^0-9]', '', 'g') = $${i} OR regexp_replace(e.destinatario_telefono, '[^0-9]', '', 'g') = $${i})`,
+      );
+    }
     if (f.q?.trim()) {
       // Los comodines de LIKE en el texto buscado se escapan: "%" o "_" se buscan literalmente.
       const i = params.push(`%${f.q.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
@@ -617,9 +764,11 @@ export class PgEnvioRepository implements EnvioRepository {
     const p = [...params];
     const limite = pagina ? ` LIMIT $${p.push(pagina.limite)} OFFSET $${p.push(pagina.desde)}` : "";
     const { rows } = await this.db.query<EnvioRow>(
-      `SELECT e.*, ue.nombre AS evidencia_subida_por_nombre, ig.nombre AS integracion_nombre
+      `SELECT e.*, ue.nombre AS evidencia_subida_por_nombre, ig.nombre AS integracion_nombre,
+              ur.nombre AS repartidor_nombre
          FROM envios e LEFT JOIN usuarios ue ON ue.id = e.evidencia_subida_por
          LEFT JOIN integraciones ig ON ig.id = e.integracion_id
+         LEFT JOIN usuarios ur ON ur.id = e.repartidor_id
        ${where} ORDER BY e.creado_en DESC, e.id DESC${limite}`,
       p,
     );
@@ -685,6 +834,9 @@ export class PgEnvioRepository implements EnvioRepository {
         integracionId: r.integracion_id,
         integracionNombre: r.integracion_nombre,
         referenciaExterna: r.referencia_externa,
+        repartidor: r.repartidor_id ? { id: r.repartidor_id, nombre: r.repartidor_nombre ?? "" } : null,
+        asignadoEn: r.asignado_en,
+        anonimizadoEn: r.anonimizado_en,
       }),
     );
   }

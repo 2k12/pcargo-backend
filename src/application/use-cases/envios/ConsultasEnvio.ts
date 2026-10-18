@@ -1,15 +1,23 @@
+import { movimientosPorEstado, SIN_MOVIMIENTOS } from "../../../domain/caja/Caja.js";
+import type { Envio } from "../../../domain/envio/Envio.js";
 import { pareceNumeroGuia, parsearNumeroGuia } from "../../../domain/envio/NumeroGuia.js";
 import { esEstado } from "../../../domain/envio/EstadoEnvio.js";
 import type { Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, toEventoDTO, type EnvioDTO, type EventoHistorialDTO } from "../../dto/EnvioDTO.js";
-import type { EnvioRepository, FiltroEnvios, Paginacion, RutaRepository } from "../../ports/repositories.js";
-import type { Clock } from "../../ports/services.js";
+import type {
+  CajaRepository,
+  EnvioRepository,
+  FiltroEnvios,
+  Paginacion,
+  RutaRepository,
+} from "../../ports/repositories.js";
+import type { Clock, IdGenerator } from "../../ports/services.js";
 import type { EmisorWebhooks } from "../integraciones/EmisorWebhooks.js";
 
 /** Para búsquedas: un número fuera de rango simplemente no filtra por guía. */
-function parsearNumeroGuiaSeguro(texto: string): number | undefined {
+export function parsearNumeroGuiaSeguro(texto: string): number | undefined {
   try {
     return parsearNumeroGuia(texto);
   } catch {
@@ -72,24 +80,56 @@ export class ObtenerEnvio {
   }
 }
 
+export interface OpcionesCambioEstado {
+  /** App del repartidor: solo sus envíos asignados (cualquier otro → 404). */
+  repartidorId?: string;
+}
+
 export class CambiarEstadoEnvio {
   constructor(
     private readonly envios: EnvioRepository,
     private readonly rutas: RutaRepository,
     private readonly clock: Clock,
     private readonly webhooks?: EmisorWebhooks,
+    /** Caja (v12): cobro CONTRA_ENTREGA al entregar un AL_COBRO y anulación/devolución del ORIGEN al cancelar. */
+    private readonly caja?: { cobros: CajaRepository; ids: IdGenerator },
   ) {}
 
   async ejecutar(actor: Actor, id: string, estado: string, nota?: string | null): Promise<EnvioDTO> {
+    const { envio, ruta } = await this.aplicar(actor, id, estado, nota);
+    return toEnvioDTO(envio, ruta, true);
+  }
+
+  /** Lógica común del panel y de la app del repartidor. */
+  async aplicar(
+    actor: Actor,
+    id: string,
+    estado: string,
+    nota?: string | null,
+    opciones: OpcionesCambioEstado = {},
+  ): Promise<{ envio: Envio; ruta: Ruta | undefined }> {
     if (!esEstado(estado)) throw new DomainError("VALIDACION", `Estado desconocido: ${estado}`);
     const envio = await this.envios.buscarPorId(id);
-    if (!envio) throw new DomainError("NO_ENCONTRADO", "Envío no encontrado");
-    envio.cambiarEstado(estado, { ahora: this.clock.ahora(), actor, nota });
+    if (!envio || (opciones.repartidorId !== undefined && envio.repartidor?.id !== opciones.repartidorId)) {
+      throw new DomainError("NO_ENCONTRADO", "Envío no encontrado");
+    }
+    const ahora = this.clock.ahora();
+    envio.cambiarEstado(estado, { ahora, actor, nota });
     const ruta = (await this.rutas.buscarPorId(envio.rutaId)) ?? undefined;
     // Envíos de una empresa: el webhook se encola en la misma transacción que el cambio de estado.
     const webhooks = (await this.webhooks?.entregasPara(envio, ruta, "envio.estado_actualizado")) ?? [];
-    await this.envios.guardar(envio, { webhooks });
-    return toEnvioDTO(envio, ruta, true);
+    // Los cobros también: si el cambio no se guarda, no hay cobro.
+    const afectaCaja = estado === "CANCELADO" || (estado === "ENTREGADO" && envio.formaPago === "AL_COBRO");
+    const caja =
+      this.caja && afectaCaja
+        ? movimientosPorEstado(envio, estado, await this.caja.cobros.cobrosDeEnvio(envio.id), {
+            nuevoId: () => this.caja!.ids.uuid(),
+            ahora,
+            actor,
+          })
+        : SIN_MOVIMIENTOS;
+    await this.envios.guardar(envio, { webhooks, caja });
+    return { envio, ruta };
   }
 }
 

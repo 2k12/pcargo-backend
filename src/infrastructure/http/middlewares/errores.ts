@@ -23,6 +23,7 @@ const STATUS: Record<ErrorCode, number> = {
   RUTA_NO_DISPONIBLE: 422,
   SERVICIO_NO_CONFIGURADO: 503,
   TIPO_CARGA_INACTIVO: 422,
+  SIN_COBROS: 422,
 };
 
 export interface RespuestaError {

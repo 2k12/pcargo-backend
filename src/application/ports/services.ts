@@ -19,6 +19,11 @@ export interface IdGenerator {
   uuid(): string;
 }
 
+/** Contraseñas temporales (accesos al portal): letras y números, generadas criptográficamente. */
+export interface GeneradorContrasenas {
+  temporal(largo: number): string;
+}
+
 /**
  * Almacén privado de archivos (evidencias de entrega). Adaptadores: memoria (tests), disco local (desarrollo)
  * y Cloudflare R2 (producción). Las claves las genera la aplicación; nunca se exponen con una URL pública.

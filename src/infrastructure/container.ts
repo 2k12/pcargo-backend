@@ -12,6 +12,8 @@ import type {
 } from "../application/ports/integraciones.js";
 import type {
   ArticuloRestringidoRepository,
+  CajaRepository,
+  DatosPersonalesRepository,
   CiudadRepository,
   ClienteRepository,
   EnvioRepository,
@@ -22,10 +24,48 @@ import type {
 import type {
   AlmacenArchivos,
   Clock,
+  GeneradorContrasenas,
   IdGenerator,
   PasswordHasher,
   TokenService,
 } from "../application/ports/services.js";
+import { ResolverSesion } from "../application/use-cases/auth/Sesion.js";
+import {
+  CerrarCaja,
+  ListarCajasPendientes,
+  ListarCierresCaja,
+  ObtenerCajaPendiente,
+  ObtenerCierreCaja,
+} from "../application/use-cases/caja/Caja.js";
+import {
+  ActualizarPoliticaDatos,
+  AtenderSolicitudDatos,
+  ConsultarTitular,
+  DepurarDatos,
+  ListarSolicitudesDatos,
+  ObtenerPoliticaDatos,
+} from "../application/use-cases/datos/DatosPersonales.js";
+import {
+  CrearEnvioPortal,
+  ListarEnviosPortal,
+  ObtenerEnvioPortal,
+  ObtenerResumenPortal,
+} from "../application/use-cases/portal/Portal.js";
+import {
+  AsignarRepartidor,
+  BuscarGuiaRepartidor,
+  CambiarEstadoRepartidor,
+  ListarEnviosRepartidor,
+  SubirEvidenciaRepartidor,
+} from "../application/use-cases/reparto/Reparto.js";
+import {
+  ActualizarUsuario,
+  CrearAccesoPortal,
+  CrearUsuario,
+  ListarAccesosCliente,
+  ListarRepartidores,
+  ListarUsuarios,
+} from "../application/use-cases/usuarios/Usuarios.js";
 import { Login } from "../application/use-cases/auth/Login.js";
 import { ObtenerPerfil } from "../application/use-cases/auth/ObtenerPerfil.js";
 import { ActualizarPerfil, CambiarContrasena } from "../application/use-cases/auth/Perfil.js";
@@ -120,6 +160,10 @@ import {
   InMemoryUsuarioRepository,
 } from "./persistence/memory/InMemoryRepositories.js";
 import { InMemoryClienteRepository } from "./persistence/memory/InMemoryClienteRepository.js";
+import { InMemoryCajaRepository } from "./persistence/memory/InMemoryCaja.js";
+import { InMemoryDatosPersonalesRepository } from "./persistence/memory/InMemoryDatosPersonales.js";
+import { PgCajaRepository } from "./persistence/postgres/PgCaja.js";
+import { PgDatosPersonalesRepository } from "./persistence/postgres/PgDatosPersonales.js";
 import {
   InMemoryEntregaWebhookRepository,
   InMemoryIdempotenciaRepository,
@@ -142,8 +186,8 @@ import {
   PgUsuarioRepository,
 } from "./persistence/postgres/PgRepositories.js";
 import { crearPool, type Db } from "./persistence/postgres/pool.js";
-import { USUARIOS_SEED } from "./persistence/seed-data.js";
-import { BcryptPasswordHasher, JwtTokenService } from "./security/adapters.js";
+import { CLIENTES_SEED, USUARIOS_SEED } from "./persistence/seed-data.js";
+import { BcryptPasswordHasher, GeneradorContrasenasCrypto, JwtTokenService } from "./security/adapters.js";
 import { ServicioApiKeysCrypto } from "./security/apiKeys.js";
 import { CifradorAesGcm, CifradorNoConfigurado, leerClaveCifrado } from "./security/cifrado.js";
 import { SecretosWebhookCrypto } from "./security/firmaWebhook.js";
@@ -177,6 +221,12 @@ export interface Adaptadores {
   cifrador: CifradorSecretos;
   secretosWebhook: ServicioSecretosWebhook;
   clienteWebhook: ClienteWebhook;
+  // ── v12 ──
+  /** Cobros y cierres de caja. */
+  caja: CajaRepository;
+  /** Política de retención, depuraciones y solicitudes del titular (LOPDP). */
+  datosPersonales: DatosPersonalesRepository;
+  contrasenas: GeneradorContrasenas;
 }
 
 export interface OpcionesCasos {
@@ -230,8 +280,27 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     permitirHttp: opciones.webhooksPermitirHttp ?? false,
   };
 
+  // v12: un solo cambio de estado y una sola subida de evidencia para el panel y la app del repartidor.
+  const cambiarEstadoBase = new CambiarEstadoEnvio(a.envios, rutas, a.clock, emisor, { cobros: a.caja, ids: a.ids });
+  const subirEvidenciaBase = new SubirEvidencia(a.envios, rutas, a.almacen, a.ids, a.clock, emisor);
+  const depsUsuarios = { usuarios: a.usuarios, clientes: a.clientes, hasher: a.hasher, ids: a.ids, clock: a.clock };
+  const depsDatos = {
+    envios: a.envios,
+    clientes: a.clientes,
+    usuarios: a.usuarios,
+    integraciones: a.integraciones,
+    datos: a.datosPersonales,
+    almacen: a.almacen,
+    ids: a.ids,
+    clock: a.clock,
+  };
+  // Anonimizar borra nombres (porCliente del dashboard, al eliminar clientes) y notas del historial (seguimiento).
+  const trasAnonimizar = [ESPACIOS.dashboard, ESPACIOS.seguimiento];
+
   return {
     tokens: a.tokens,
+    /** Actor de cada solicitud autenticada (usuario activo, rol y cliente vigentes). */
+    sesion: new ResolverSesion(a.tokens, a.usuarios),
     login: new Login(a.usuarios, a.hasher, a.tokens),
     perfil: new ObtenerPerfil(a.usuarios),
     // Ninguna lectura cacheada muestra nombres de operadores: editar el perfil no invalida cachés.
@@ -279,18 +348,17 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     cotizar,
     crearEnvio: invalidaTras(crearEnvioBase, cache, [ESPACIOS.dashboard]),
     // Los nombres de clientes aparecen en el resumen: sus escrituras invalidan el dashboard.
-    listarClientes: new ListarClientes(a.clientes, a.envios),
+    listarClientes: new ListarClientes(a.clientes, a.envios, a.usuarios),
     crearCliente: invalidaTras(new CrearCliente(a.clientes, a.ids, a.clock), cache, [ESPACIOS.dashboard]),
-    actualizarCliente: invalidaTras(new ActualizarCliente(a.clientes, a.envios, a.clock), cache, [ESPACIOS.dashboard]),
+    actualizarCliente: invalidaTras(new ActualizarCliente(a.clientes, a.envios, a.clock, a.usuarios), cache, [
+      ESPACIOS.dashboard,
+    ]),
     eliminarCliente: invalidaTras(new EliminarCliente(a.clientes), cache, [ESPACIOS.dashboard]),
     listarEnvios: new ListarEnvios(a.envios, rutas),
     obtenerEnvio: new ObtenerEnvio(a.envios, rutas),
-    cambiarEstado: invalidaTras(new CambiarEstadoEnvio(a.envios, rutas, a.clock, emisor), cache, [
-      ESPACIOS.dashboard,
-      ESPACIOS.seguimiento,
-    ]),
+    cambiarEstado: invalidaTras(cambiarEstadoBase, cache, [ESPACIOS.dashboard, ESPACIOS.seguimiento]),
     // La evidencia no aparece en el seguimiento público ni en el dashboard: no invalida cachés.
-    subirEvidencia: new SubirEvidencia(a.envios, rutas, a.almacen, a.ids, a.clock, emisor),
+    subirEvidencia: subirEvidenciaBase,
     obtenerEvidencia: new ObtenerEvidencia(a.envios, a.almacen),
     seguimiento: conCache(new ConsultarSeguimiento(a.envios, rutas), cache, {
       clave: (guia) => `${ESPACIOS.seguimiento}${claveGuia(guia)}`,
@@ -329,6 +397,45 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     crearLoteApi: invalidaTras(new CrearLoteApi(crearEnvioApi), cache, [ESPACIOS.dashboard]),
     consultarEnvioApi: new ConsultarEnvioApi(a.envios, rutas, publicUrl),
 
+    // ── Usuarios y accesos al portal (v12). Ninguna lectura cacheada muestra usuarios.
+    listarUsuarios: new ListarUsuarios(depsUsuarios),
+    crearUsuario: new CrearUsuario(depsUsuarios),
+    actualizarUsuario: new ActualizarUsuario(depsUsuarios),
+    listarRepartidores: new ListarRepartidores(a.usuarios),
+    listarAccesosCliente: new ListarAccesosCliente(depsUsuarios),
+    crearAccesoPortal: new CrearAccesoPortal(depsUsuarios, a.contrasenas),
+
+    // ── Asignación y app del repartidor (v12). Los cambios de estado y cobros invalidan dashboard y seguimiento.
+    asignarRepartidor: invalidaTras(new AsignarRepartidor(a.envios, a.usuarios, a.clock), cache, [ESPACIOS.dashboard]),
+    listarEnviosRepartidor: new ListarEnviosRepartidor(a.envios, rutas, a.clock),
+    buscarGuiaRepartidor: new BuscarGuiaRepartidor(a.envios, rutas),
+    cambiarEstadoRepartidor: invalidaTras(new CambiarEstadoRepartidor(cambiarEstadoBase), cache, [
+      ESPACIOS.dashboard,
+      ESPACIOS.seguimiento,
+    ]),
+    subirEvidenciaRepartidor: new SubirEvidenciaRepartidor(subirEvidenciaBase),
+
+    // ── Caja (v12): no hay lecturas cacheadas de cobros ni cierres.
+    listarCajasPendientes: new ListarCajasPendientes(a.caja, a.usuarios),
+    obtenerCajaPendiente: new ObtenerCajaPendiente(a.caja, a.usuarios),
+    cerrarCaja: new CerrarCaja(a.caja, a.usuarios, a.ids, a.clock),
+    listarCierresCaja: new ListarCierresCaja(a.caja),
+    obtenerCierreCaja: new ObtenerCierreCaja(a.caja),
+
+    // ── Datos personales (v12, ADMIN). La depuración diaria de main.ts usa depurarDatos con actor null.
+    obtenerPoliticaDatos: new ObtenerPoliticaDatos(depsDatos),
+    actualizarPoliticaDatos: new ActualizarPoliticaDatos(depsDatos),
+    depurarDatos: invalidaTras(new DepurarDatos(depsDatos), cache, trasAnonimizar),
+    consultarTitular: new ConsultarTitular(depsDatos),
+    atenderSolicitudDatos: invalidaTras(new AtenderSolicitudDatos(depsDatos), cache, trasAnonimizar),
+    listarSolicitudesDatos: new ListarSolicitudesDatos(depsDatos),
+
+    // ── Portal de clientes empresa (v12): lecturas por cliente, sin caché; cotizar y catálogo reutilizan los públicos.
+    resumenPortal: new ObtenerResumenPortal(a.envios, a.clientes, a.clock),
+    listarEnviosPortal: new ListarEnviosPortal(a.envios, rutas),
+    obtenerEnvioPortal: new ObtenerEnvioPortal(a.envios, rutas),
+    crearEnvioPortal: invalidaTras(new CrearEnvioPortal(crearEnvioBase, a.clientes), cache, [ESPACIOS.dashboard]),
+
     // ── Tareas de fondo: solo las ejecuta el despachador de main.ts (o un test, de forma explícita).
     despacharWebhooks: new DespacharWebhooks(depsEntrega),
     purgarRegistrosApi: new PurgarRegistrosApi(a.solicitudesApi, a.idempotencia, a.clock),
@@ -347,12 +454,14 @@ export async function adaptadoresEnMemoria(
 ): Promise<Adaptadores> {
   const { jwtSecret, rondasBcrypt, webhooksPermitirHttp, ...sobrescribir } = opciones;
   const hasher = opciones.hasher ?? new BcryptPasswordHasher(rondasBcrypt ?? 10);
-  const usuarios = await Promise.all(
-    USUARIOS_SEED.map(async ({ password, ...u }) => ({
-      ...u,
-      passwordHash: await hasher.hash(password),
-      activo: true,
-    })),
+  const usuarios = new InMemoryUsuarioRepository(
+    await Promise.all(
+      USUARIOS_SEED.map(async ({ password, ...u }) => ({
+        ...u,
+        passwordHash: await hasher.hash(password),
+        activo: true,
+      })),
+    ),
   );
   // Ciudades y rutas comparten la misma lista para que renombrar/desactivar se refleje en las rutas.
   const ciudades = ciudadesSemilla();
@@ -366,16 +475,24 @@ export async function adaptadoresEnMemoria(
     solicitudesApi.eliminarDeIntegracion(id);
     idempotencia.eliminarDeIntegracion(id);
   });
-  const envios = new InMemoryEnvioRepository({ outbox: entregasWebhook, nombreIntegracion: integraciones.nombre });
+  // Caja: el repo de envíos registra los cobros al guardar (como la transacción de Postgres).
+  const caja = new InMemoryCajaRepository(usuarios.nombre);
+  const envios = new InMemoryEnvioRepository({
+    outbox: entregasWebhook,
+    nombreIntegracion: integraciones.nombre,
+    caja,
+    nombreUsuario: usuarios.nombre,
+  });
   return {
-    usuarios: new InMemoryUsuarioRepository(usuarios),
+    usuarios,
     ciudades: new InMemoryCiudadRepository(ciudades),
     // Como la FK de envio_items en Postgres: no se elimina un tipo que algún envío usa.
     tiposCarga: new InMemoryTipoCargaRepository(undefined, { usaTipoCarga: (c) => envios.usaTipoCarga(c) }),
     articulos: new InMemoryArticuloRestringidoRepository(),
     rutas: new InMemoryRutaRepository(ciudades),
     envios,
-    clientes: new InMemoryClienteRepository(),
+    // Eliminar un cliente desactiva y desvincula sus usuarios del portal (en Postgres, en la misma transacción).
+    clientes: new InMemoryClienteRepository(CLIENTES_SEED, { alEliminar: (id) => usuarios.desvincularCliente(id) }),
     almacen: new AlmacenMemoria(),
     hasher,
     tokens: new JwtTokenService(jwtSecret),
@@ -390,6 +507,9 @@ export async function adaptadoresEnMemoria(
     cifrador: new CifradorAesGcm(randomBytes(32)),
     secretosWebhook: new SecretosWebhookCrypto(),
     clienteWebhook: new ClienteWebhookFetch({ permitirHttp: webhooksPermitirHttp ?? false }),
+    caja,
+    datosPersonales: new InMemoryDatosPersonalesRepository(),
+    contrasenas: new GeneradorContrasenasCrypto(),
     ...sobrescribir,
   };
 }
@@ -421,6 +541,9 @@ export function adaptadoresPostgres(
     cifrador: crearCifrador(config.INTEGRACIONES_CLAVE_CIFRADO),
     secretosWebhook: new SecretosWebhookCrypto(),
     clienteWebhook: new ClienteWebhookFetch({ permitirHttp: config.WEBHOOKS_PERMITIR_HTTP ?? false }),
+    caja: new PgCajaRepository(db),
+    datosPersonales: new PgDatosPersonalesRepository(db),
+    contrasenas: new GeneradorContrasenasCrypto(),
   };
 }
 

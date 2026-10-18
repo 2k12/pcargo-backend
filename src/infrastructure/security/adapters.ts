@@ -1,6 +1,7 @@
+import { randomInt } from "node:crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import type { PasswordHasher, TokenService } from "../../application/ports/services.js";
+import type { GeneradorContrasenas, PasswordHasher, TokenService } from "../../application/ports/services.js";
 import { DomainError } from "../../domain/shared/DomainError.js";
 import { ROLES, type Actor } from "../../domain/usuario/Usuario.js";
 
@@ -34,6 +35,22 @@ export class JwtTokenService implements TokenService {
       return { id: p.sub, nombre: String(p.nombre), rol: p.rol };
     } catch {
       throw new DomainError("NO_AUTENTICADO", "Sesión inválida o expirada");
+    }
+  }
+}
+
+const ALFANUMERICO = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+
+/**
+ * Contraseñas temporales con `crypto.randomInt` (CSPRNG, sin sesgo de módulo). Sin caracteres confusos (0/O, 1/l/I) y
+ * siempre con al menos una letra y un número (cumplen la política de contraseñas).
+ */
+export class GeneradorContrasenasCrypto implements GeneradorContrasenas {
+  temporal(largo: number): string {
+    for (;;) {
+      let clave = "";
+      for (let i = 0; i < largo; i++) clave += ALFANUMERICO[randomInt(ALFANUMERICO.length)];
+      if (/[A-Za-z]/.test(clave) && /[0-9]/.test(clave)) return clave;
     }
   }
 }

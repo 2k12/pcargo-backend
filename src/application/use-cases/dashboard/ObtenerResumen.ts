@@ -3,7 +3,8 @@ import { ESTADOS, type EstadoEnvio } from "../../../domain/envio/EstadoEnvio.js"
 import { FORMAS_PAGO, type FormaPago } from "../../../domain/envio/FormaPago.js";
 import type { Canal } from "../../../domain/integracion/Integracion.js";
 import { nombreRuta } from "../../../domain/ruta/Ruta.js";
-import { DomainError, redondear2 } from "../../../domain/shared/DomainError.js";
+import { redondear2 } from "../../../domain/shared/DomainError.js";
+import { aTiempo, DIA_MS, diasEntre, fechaLocalEC, validarRangoEC } from "../../../domain/shared/FechaEcuador.js";
 import type { ClienteRepository, EnvioRepository, RutaRepository, TipoCargaRepository } from "../../ports/repositories.js";
 import type { Clock } from "../../ports/services.js";
 
@@ -36,32 +37,10 @@ export interface Resumen {
   porCanal: { canal: Canal; integracionId: string | null; nombre: string; envios: number; monto: number }[];
 }
 
-/** Ecuador continental no tiene horario de verano: UTC−5 todo el año. */
-const OFFSET_EC_MS = -5 * 60 * 60 * 1000;
-const DIA_MS = 24 * 60 * 60 * 1000;
 const MAX_DIAS_SERIE = 92;
-const FECHA = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Fecha local de Ecuador `YYYY-MM-DD`. */
-export const fechaLocalEC = (d: Date): string => new Date(d.getTime() + OFFSET_EC_MS).toISOString().slice(0, 10);
-
-const aTiempo = (fecha: string): number => Date.parse(`${fecha}T00:00:00Z`);
-
-function validarFecha(texto: string | undefined, campo: string): void {
-  if (texto !== undefined && (!FECHA.test(texto) || Number.isNaN(aTiempo(texto)))) {
-    throw new DomainError("VALIDACION", `${campo}: use el formato AAAA-MM-DD`);
-  }
-}
-
-/** Días consecutivos `YYYY-MM-DD` entre dos fechas (inclusive), como máximo los últimos `MAX_DIAS_SERIE`. */
-function dias(desde: string, hasta: string): string[] {
-  const fin = aTiempo(hasta);
-  const lista: string[] = [];
-  for (let t = Math.max(aTiempo(desde), fin - (MAX_DIAS_SERIE - 1) * DIA_MS); t <= fin; t += DIA_MS) {
-    lista.push(new Date(t).toISOString().slice(0, 10));
-  }
-  return lista;
-}
+/** Fecha local de Ecuador `YYYY-MM-DD` (se reexporta por compatibilidad). */
+export { fechaLocalEC };
 
 interface Acumulado {
   envios: number;
@@ -86,11 +65,7 @@ export class ObtenerResumen {
   ) {}
 
   async ejecutar(filtro: FiltroResumen = {}): Promise<Resumen> {
-    validarFecha(filtro.desde, "desde");
-    validarFecha(filtro.hasta, "hasta");
-    if (filtro.desde && filtro.hasta && filtro.desde > filtro.hasta) {
-      throw new DomainError("VALIDACION", "La fecha inicial no puede ser posterior a la final");
-    }
+    validarRangoEC(filtro.desde, filtro.hasta);
     const [todos, rutas, clientes, tiposActivos] = await Promise.all([
       this.envios.listar({
         ...(filtro.clienteId ? { clienteId: filtro.clienteId } : {}),
@@ -161,7 +136,7 @@ export class ObtenerResumen {
         }))
         .sort((a, b) => b.total - a.total),
       porFormaPago: [...porPago].map(([formaPago, v]) => ({ formaPago, envios: v.envios, monto: redondear2(v.monto) })),
-      porDia: dias(desde, hasta > desde ? hasta : desde).map((fecha) => {
+      porDia: diasEntre(desde, hasta > desde ? hasta : desde, MAX_DIAS_SERIE).map((fecha) => {
         const d = porDia.get(fecha);
         return { fecha, envios: d?.envios ?? 0, ingresos: redondear2(d?.monto ?? 0) };
       }),

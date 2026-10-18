@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type {
+  CajaRepository,
+  DatosPersonalesRepository,
   CiudadRepository,
   ClienteRepository,
   EnvioRepository,
@@ -19,6 +21,7 @@ import type {
 import type { Integracion } from "../../src/domain/integracion/Integracion.js";
 import type { EntregaWebhook } from "../../src/domain/integracion/Webhook.js";
 import { Envio } from "../../src/domain/envio/Envio.js";
+import { crearCierre, resumirCobros, type Cobro } from "../../src/domain/caja/Caja.js";
 import { ARTICULOS_SEED, TIPOS_CARGA_SEED, USUARIOS_SEED } from "../../src/infrastructure/persistence/seed-data.js";
 import { ADMIN, OPERADOR, solicitudEnvio } from "./fakes.js";
 
@@ -37,6 +40,9 @@ export interface FabricaRepos {
   entregasWebhook: EntregaWebhookRepository;
   solicitudesApi: SolicitudApiRepository;
   idempotencia: IdempotenciaRepository;
+  // ── v12 ──
+  caja: CajaRepository;
+  datosPersonales: DatosPersonalesRepository;
 }
 
 export const ID_INTEGRACION = "00000000-0000-4000-e000-000000000001";
@@ -366,6 +372,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
         nombre: "Paola Ruiz",
         email: op.email,
         rol: "OPERADOR",
+        clienteId: null,
       });
       expect(await repos.usuarios.actualizarPerfil(op.id, { email: "paola@pcargo.ec" })).toMatchObject({ nombre: "Paola Ruiz", email: "paola@pcargo.ec" });
       expect(await repos.usuarios.buscarPorEmail("paola@pcargo.ec")).toMatchObject({ id: op.id });
@@ -796,6 +803,262 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       await repos.articulos.eliminar(nuevo.id);
       expect(await repos.articulos.buscarPorId(nuevo.id)).toBeNull();
       expect(await repos.articulos.listar()).toHaveLength(14);
+    });
+    // ── v12: usuarios, reparto, caja y datos personales ──────────────────────
+
+    const REP = { id: USUARIOS_SEED[2]!.id, nombre: USUARIOS_SEED[2]!.nombre, rol: "REPARTIDOR" as const };
+    let m = 0;
+    /** Envío de un ítem (3.00) con la forma de pago indicada. */
+    const envioV12 = (formaPago: "PAGADO" | "AL_COBRO" | "CONTRATO" = "PAGADO", minutos = 0, sobre: Partial<Parameters<typeof Envio.crear>[0]> = {}) => {
+      m++;
+      return Envio.crear(
+        {
+          remitente: { nombre: "María Pérez", telefono: "0991234567", direccion: "Bolívar 1-23" },
+          destinatario: { nombre: "Juan Andrade", telefono: "098 765 4321", direccion: "Av. Amazonas, Quito" },
+          rutaId: 11,
+          items: [{ tipoCarga: "PAQUETE", cantidad: 1, pesoKg: 2, costoUnitario: 3, subtotal: 3 }],
+          formaPago,
+          descripcion: "Ropa",
+          ...sobre,
+        },
+        {
+          id: `00000000-0000-4000-c000-${String(m).padStart(12, "0")}`,
+          numeroGuia: 90000 + m,
+          ahora: new Date(Date.UTC(2026, 9, 1, 12, minutos)),
+          actor: OPERADOR,
+          notaRegistro: "Paquete frágil",
+        },
+      );
+    };
+    const fecha = (min: number) => new Date(Date.UTC(2026, 9, 1, 12, min));
+    const cobroDe = (envio: Envio, tipo: Cobro["tipo"], monto: number, usuario = OPERADOR, min = 0): Cobro => ({
+      id: `00000000-0000-4000-c100-${String(++m).padStart(12, "0")}`,
+      tipo,
+      monto,
+      envioId: envio.id,
+      numeroGuia: envio.numeroGuia,
+      formaPago: envio.toSnapshot().formaPago,
+      usuario: { id: usuario.id, nombre: usuario.nombre },
+      fecha: fecha(min),
+      cierreId: null,
+    });
+    const cierreDe = (id: string, pendientes: Cobro[], usuario = OPERADOR, min = 30) =>
+      crearCierre(pendientes, {
+        id,
+        fecha: fecha(min),
+        usuario: { id: usuario.id, nombre: usuario.nombre, rol: usuario.rol },
+        recibidoPor: { id: ADMIN.id, nombre: ADMIN.nombre },
+        montoEntregado: resumirCobros(pendientes).total,
+      });
+
+    it("usuarios (v12): alta, listado por nombre con filtros, obtener, actualizar, correo único y accesos del portal", async () => {
+      const cliente = "00000000-0000-4000-c200-000000000001";
+      await repos.clientes.crear({ id: cliente, nombre: "Textiles Andinos", telefono: "062900100", direccion: null, notas: null, creadoEn: fecha(0), consentimientoEn: fecha(0) });
+      const base = { passwordHash: "hash:Clave1234", activo: true, creadoEn: fecha(5) };
+      const zeta = { ...base, id: "00000000-0000-4000-c300-000000000001", nombre: "Zeta Repartidor", email: "zeta@pcargo.ec", rol: "REPARTIDOR" as const, clienteId: null };
+      const compras = { ...base, id: "00000000-0000-4000-c300-000000000002", nombre: "Compras Textiles", email: "compras@textiles.ec", rol: "CLIENTE" as const, clienteId: cliente };
+      const bodega = { ...compras, id: "00000000-0000-4000-c300-000000000003", nombre: "Bodega Textiles", email: "bodega@textiles.ec", activo: false };
+      for (const u of [zeta, compras, bodega]) await repos.usuarios.crear(u);
+      await expect(repos.usuarios.crear({ ...zeta, id: "00000000-0000-4000-c300-000000000009" })).rejects.toMatchObject({ code: "CONFLICTO" });
+
+      expect((await repos.usuarios.listar()).map((u) => u.nombre)).toEqual([
+        "Administrador PCargo",
+        "Bodega Textiles",
+        "Compras Textiles",
+        "Operador Ibarra",
+        "Portal Textiles Atuntaqui",
+        "Repartidor Ibarra",
+        "Zeta Repartidor",
+      ]);
+      expect((await repos.usuarios.listar({ rol: "REPARTIDOR", activo: true })).map((u) => u.id)).toEqual([REP.id, zeta.id]);
+      expect((await repos.usuarios.listar({ clienteId: cliente })).map((u) => u.email)).toEqual(["bodega@textiles.ec", "compras@textiles.ec"]);
+      const { passwordHash: _, ...sinHash } = bodega;
+      expect(await repos.usuarios.obtener(bodega.id)).toEqual(sinHash);
+      expect(await repos.usuarios.buscarPorId(bodega.id)).toBeNull(); // inactivo
+      expect(await repos.usuarios.buscarPorEmail("compras@textiles.ec")).toMatchObject({ clienteId: cliente, activo: true });
+      expect(await repos.usuarios.accesosPortalPorCliente()).toEqual(new Map([[cliente, 1]]));
+
+      expect(await repos.usuarios.actualizar(zeta.id, { nombre: "Alfa Repartidor", rol: "OPERADOR", activo: false, passwordHash: "hash:Otra1234" })).toMatchObject({
+        nombre: "Alfa Repartidor",
+        rol: "OPERADOR",
+        activo: false,
+      });
+      expect(await repos.usuarios.buscarPorEmail("zeta@pcargo.ec")).toMatchObject({ passwordHash: "hash:Otra1234", activo: false });
+      await expect(repos.usuarios.actualizar(zeta.id, { email: "admin@pcargo.ec" })).rejects.toMatchObject({ code: "CONFLICTO" });
+
+      // eliminar el cliente desactiva y desvincula a sus usuarios del portal (cuenta solo los que estaban activos)
+      expect(await repos.clientes.eliminar(cliente)).toBe(1);
+      expect((await repos.usuarios.listar({ rol: "CLIENTE" })).filter((u) => u.id !== USUARIOS_SEED[3]!.id).map((u) => [u.activo, u.clienteId])).toEqual([
+        [false, null],
+        [false, null],
+      ]);
+      expect(await repos.usuarios.accesosPortalPorCliente()).toEqual(new Map());
+    });
+
+    it("envíos (v12): asignación atómica de repartidor (con su nombre) y filtros de reparto y retención", async () => {
+      const [e1, e2, e3] = [envioV12("PAGADO", 1), envioV12("AL_COBRO", 2), envioV12("CONTRATO", 3)];
+      for (const e of [e1, e2, e3]) await repos.envios.guardar(e!);
+      e3!.cambiarEstado("CANCELADO", { ahora: fecha(10), actor: OPERADOR });
+      await repos.envios.guardar(e3!);
+
+      expect(await repos.envios.asignarRepartidor([e1!.id, e2!.id], REP.id, fecha(20))).toBe(2);
+      expect((await repos.envios.buscarPorId(e1!.id))!.toSnapshot()).toMatchObject({
+        repartidor: { id: REP.id, nombre: REP.nombre },
+        asignadoEn: fecha(20),
+        historial: [{ estado: "REGISTRADO" }],
+      });
+      await expect(repos.envios.asignarRepartidor([e1!.id, e3!.id], null, fecha(21))).rejects.toMatchObject({ code: "ESTADO_INVALIDO" });
+      await expect(repos.envios.asignarRepartidor([e1!.id, "00000000-0000-4000-c000-0000000000ff"], null, fecha(21))).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+      expect((await repos.envios.buscarPorId(e1!.id))!.repartidor?.id).toBe(REP.id);
+      // guardar un cambio de estado (con una copia leída antes de asignar) no pisa la asignación
+      e1!.cambiarEstado("EN_TRANSITO", { ahora: fecha(22), actor: OPERADOR });
+      await repos.envios.guardar(e1!);
+      expect((await repos.envios.buscarPorId(e1!.id))!.repartidor?.id).toBe(REP.id);
+
+      const guias = async (f: Parameters<typeof repos.envios.listar>[0]) => (await repos.envios.listar(f)).map((e) => e.numeroGuia).sort();
+      expect(await guias({ repartidorId: REP.id })).toEqual([e1!.numeroGuia, e2!.numeroGuia]);
+      expect(await guias({ repartidorId: null })).toEqual([e3!.numeroGuia]);
+      expect(await guias({ estados: ["REGISTRADO", "CANCELADO"] })).toEqual([e2!.numeroGuia, e3!.numeroGuia]);
+      expect(await guias({ actualizadoDesde: fecha(10) })).toEqual([e1!.numeroGuia, e3!.numeroGuia]);
+      expect(await guias({ actualizadoAntes: fecha(10) })).toEqual([e2!.numeroGuia]);
+      expect(await guias({ telefono: "0987654321" })).toEqual([e1!.numeroGuia, e2!.numeroGuia, e3!.numeroGuia]);
+      expect(await guias({ telefono: "0980000000" })).toEqual([]);
+      expect(await guias({ anonimizado: true })).toEqual([]);
+      const pagina = await repos.envios.listarPagina({ repartidorId: REP.id, estados: ["EN_TRANSITO"] }, { pagina: 1, porPagina: 10 });
+      expect([pagina.total, pagina.envios[0]?.id]).toEqual([1, e1!.id]);
+      // quitar la asignación
+      expect(await repos.envios.asignarRepartidor([e1!.id], null, fecha(30))).toBe(1);
+      expect((await repos.envios.buscarPorId(e1!.id))!.toSnapshot()).toMatchObject({ repartidor: null, asignadoEn: null });
+    });
+
+    it("envíos (v12): anonimizar persiste los datos borrados y las notas; sin anonimizar los datos personales no cambian", async () => {
+      const e = envioV12("CONTRATO", 1);
+      await repos.envios.guardar(e);
+      e.cambiarEstado("CANCELADO", { ahora: fecha(5), actor: OPERADOR, nota: "Desistió el cliente" });
+      await repos.envios.guardar(e);
+      const copia = (await repos.envios.buscarPorId(e.id))!;
+      e.anonimizar(fecha(100));
+      await repos.envios.guardar(e);
+      const leido = (await repos.envios.buscarPorId(e.id))!.toSnapshot();
+      expect(leido).toMatchObject({
+        remitente: { nombre: "Anonimizado", telefono: "", direccion: null },
+        destinatario: { nombre: "Anonimizado", telefono: "", direccion: "Anonimizado" },
+        descripcion: null,
+        anonimizadoEn: fecha(100),
+        estado: "CANCELADO",
+        costo: 3,
+        actualizadoEn: fecha(5),
+      });
+      expect(leido.historial.map((h) => [h.estado, h.nota])).toEqual([
+        ["REGISTRADO", null],
+        ["CANCELADO", null],
+      ]);
+      expect((await repos.envios.listar({ anonimizado: true })).map((x) => x.id)).toEqual([e.id]);
+      // una copia vieja (sin anonimizar) no restaura los datos
+      await repos.envios.guardar(copia);
+      expect((await repos.envios.buscarPorId(e.id))!.toSnapshot()).toMatchObject({ remitente: { nombre: "Anonimizado" }, anonimizadoEn: fecha(100) });
+    });
+
+    it("caja: cobros en la misma transacción del envío, anulación o devolución, cierre atómico y listados", async () => {
+      const pagado = envioV12("PAGADO", 1);
+      const origen = cobroDe(pagado, "ORIGEN", 3, OPERADOR, 1);
+      await repos.envios.guardar(pagado, { caja: { cobros: [origen], anulaciones: [] } });
+      expect(await repos.caja.pendientes()).toEqual([origen]);
+      expect(await repos.caja.cobrosDeEnvio(pagado.id)).toEqual([origen]);
+
+      // un segundo ORIGEN del mismo envío se rechaza y el cambio del envío tampoco se guarda
+      pagado.cambiarEstado("EN_TRANSITO", { ahora: fecha(2), actor: OPERADOR });
+      await expect(
+        repos.envios.guardar(pagado, { caja: { cobros: [cobroDe(pagado, "ORIGEN", 3)], anulaciones: [] } }),
+      ).rejects.toMatchObject({ code: "CONFLICTO" });
+      expect((await repos.envios.buscarPorId(pagado.id))!.estado).toBe("REGISTRADO");
+
+      const alCobro = envioV12("AL_COBRO", 3);
+      await repos.envios.guardar(alCobro);
+      const contra = cobroDe(alCobro, "CONTRA_ENTREGA", 3, REP, 4);
+      await repos.envios.guardar(alCobro, { caja: { cobros: [contra], anulaciones: [] } });
+      expect((await repos.caja.pendientes(REP.id)).map((c) => c.id)).toEqual([contra.id]);
+
+      // cierre: toma todos los pendientes de la persona; uno simultáneo no los vuelve a tomar
+      const [r1, r2] = await Promise.allSettled([
+        repos.caja.cerrar(OPERADOR.id, (p) => cierreDe("00000000-0000-4000-c400-000000000001", p)),
+        repos.caja.cerrar(OPERADOR.id, (p) => cierreDe("00000000-0000-4000-c400-000000000002", p)),
+      ]);
+      const ok = [r1, r2].filter((r) => r.status === "fulfilled");
+      const fallo = [r1, r2].filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+      expect(ok).toHaveLength(1);
+      expect(fallo.map((f) => (f.reason as { code: string }).code)).toEqual(["SIN_COBROS"]);
+      const { cierre, cobros } = (ok[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof repos.caja.cerrar>>>).value;
+      expect(cobros).toEqual([{ ...origen, cierreId: cierre.id }]);
+      expect(await repos.caja.pendientes(OPERADOR.id)).toEqual([]);
+      expect(await repos.caja.buscarCierre(cierre.id)).toEqual({
+        id: cierre.id,
+        usuario: { id: OPERADOR.id, nombre: OPERADOR.nombre, rol: "OPERADOR" },
+        recibidoPor: { id: ADMIN.id, nombre: ADMIN.nombre },
+        fecha: fecha(30),
+        esperado: 3,
+        entregado: 3,
+        diferencia: 0,
+        cantidad: 1,
+        nota: null,
+        porTipo: [
+          { tipo: "ORIGEN", cantidad: 1, monto: 3 },
+          { tipo: "CONTRA_ENTREGA", cantidad: 0, monto: 0 },
+          { tipo: "DEVOLUCION", cantidad: 0, monto: 0 },
+        ],
+      });
+      expect(await repos.caja.cobrosDeCierre(cierre.id)).toEqual([{ ...origen, cierreId: cierre.id }]);
+
+      // cancelar con el ORIGEN ya cerrado: la anulación se convierte en devolución
+      const devolucion = cobroDe(pagado, "DEVOLUCION", -3, ADMIN, 40);
+      await repos.envios.guardar(pagado, { caja: { cobros: [], anulaciones: [{ cobroId: origen.id, siYaCerrado: devolucion }] } });
+      expect(await repos.caja.pendientes(ADMIN.id)).toEqual([devolucion]);
+      // con el ORIGEN pendiente: desaparece
+      const otro = envioV12("PAGADO", 41);
+      const origen2 = cobroDe(otro, "ORIGEN", 3, OPERADOR, 41);
+      await repos.envios.guardar(otro, { caja: { cobros: [origen2], anulaciones: [] } });
+      otro.cambiarEstado("CANCELADO", { ahora: fecha(42), actor: OPERADOR });
+      await repos.envios.guardar(otro, { caja: { cobros: [], anulaciones: [{ cobroId: origen2.id, siYaCerrado: cobroDe(otro, "DEVOLUCION", -3) }] } });
+      expect(await repos.caja.cobrosDeEnvio(otro.id)).toEqual([]);
+
+      // listados de cierres: recientes primero, filtros y páginas
+      const segundo = await repos.caja.cerrar(REP.id, (p) => cierreDe("00000000-0000-4000-c400-000000000003", p, REP, 90));
+      const lista = await repos.caja.listarCierres({}, { pagina: 1, porPagina: 10 });
+      expect([lista.total, lista.cierres.map((k) => k.id)]).toEqual([2, [segundo.cierre.id, cierre.id]]);
+      expect((await repos.caja.listarCierres({ usuarioId: REP.id }, { pagina: 1, porPagina: 10 })).cierres.map((k) => k.usuario)).toEqual([
+        { id: REP.id, nombre: REP.nombre, rol: "REPARTIDOR" },
+      ]);
+      expect((await repos.caja.listarCierres({ desde: fecha(31), hasta: fecha(91) }, { pagina: 1, porPagina: 10 })).cierres.map((k) => k.id)).toEqual([segundo.cierre.id]);
+      expect((await repos.caja.listarCierres({ hasta: fecha(30) }, { pagina: 1, porPagina: 10 })).total).toBe(0);
+      const p2 = await repos.caja.listarCierres({}, { pagina: 2, porPagina: 1 });
+      expect([p2.total, p2.cierres.map((k) => k.id)]).toEqual([2, [cierre.id]]);
+      expect(await repos.caja.buscarCierre("00000000-0000-4000-c400-0000000000ff")).toBeNull();
+    });
+
+    it("datos personales: configuración por defecto, plazo, última depuración y solicitudes paginadas", async () => {
+      expect(await repos.datosPersonales.obtenerConfiguracion()).toEqual({ mesesRetencion: 12, ultimaDepuracion: null });
+      await repos.datosPersonales.guardarMesesRetencion(36);
+      await repos.datosPersonales.registrarDepuracion({ fecha: fecha(5), envios: 3, clientes: 1, evidencias: 2 });
+      expect(await repos.datosPersonales.obtenerConfiguracion()).toEqual({
+        mesesRetencion: 36,
+        ultimaDepuracion: { fecha: fecha(5), envios: 3, clientes: 1, evidencias: 2 },
+      });
+      const solicitud = (n: number, min: number) => ({
+        id: `00000000-0000-4000-c500-${String(n).padStart(12, "0")}`,
+        tipo: "ELIMINACION" as const,
+        nombreTitular: `Titular ${n}`,
+        telefonoFinal: "…4567",
+        canal: "CORREO" as const,
+        nota: n === 1 ? null : "Por correo",
+        fecha: fecha(min),
+        atendidaPor: ADMIN.nombre,
+        resultado: { envios: n, clientes: 1, evidencias: 0, usuariosDesactivados: 0, enCurso: 0 },
+      });
+      for (const [n, min] of [[1, 10], [2, 30], [3, 20]] as const) await repos.datosPersonales.crearSolicitud(solicitud(n, min));
+      const p1 = await repos.datosPersonales.listarSolicitudes({ pagina: 1, porPagina: 2 });
+      expect(p1.total).toBe(3);
+      expect(p1.solicitudes).toEqual([solicitud(2, 30), solicitud(3, 20)]);
+      expect((await repos.datosPersonales.listarSolicitudes({ pagina: 2, porPagina: 2 })).solicitudes).toEqual([solicitud(1, 10)]);
     });
   });
 }

@@ -34,3 +34,17 @@ export const esResultadoEntrega = (e: EstadoEnvio): e is ResultadoEntrega =>
 
 export const puedeTransicionar = (desde: EstadoEnvio, hacia: EstadoEnvio): boolean =>
   TRANSICIONES[desde].includes(hacia);
+
+/** Estados finales: el envío terminó (base del plazo de conservación de datos personales). */
+export const ESTADOS_FINALES: readonly EstadoEnvio[] = ["ENTREGADO", "CANCELADO"];
+
+export const esFinal = (e: EstadoEnvio): boolean => ESTADOS_FINALES.includes(e);
+
+/** Estados «en curso» que ve el repartidor como pendientes. */
+export const ESTADOS_PENDIENTES_REPARTO: readonly EstadoEnvio[] = [
+  "REGISTRADO",
+  "EN_TRANSITO",
+  "EN_REPARTO",
+  "NOVEDAD",
+  "NO_ENTREGADO",
+];

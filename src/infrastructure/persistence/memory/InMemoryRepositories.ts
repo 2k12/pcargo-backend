@@ -1,4 +1,6 @@
 import type {
+  CambiosUsuarioRepo,
+  FiltroUsuarios,
   CambiosCiudad,
   CambiosRuta,
   CiudadRepository,
@@ -19,26 +21,60 @@ import { Envio, type EnvioProps } from "../../../domain/envio/Envio.js";
 import type { EntregaWebhook } from "../../../domain/integracion/Webhook.js";
 import type { Ciudad, Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
-import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
+import type { CambiosPerfil, Usuario, UsuarioAdmin, UsuarioConCredenciales } from "../../../domain/usuario/Usuario.js";
+import type { MovimientosCaja } from "../../../domain/caja/Caja.js";
+import { digitosTelefono } from "../../../domain/cliente/Cliente.js";
+import { esFinal } from "../../../domain/envio/EstadoEnvio.js";
 import { ARTICULOS_SEED, CIUDADES, RUTAS_SEED, TIPOS_CARGA_SEED } from "../seed-data.js";
 
 // Adaptadores en memoria: usados en tests y en `DB_DRIVER=memory` (demo sin Postgres).
 
+/** Usuario guardado en memoria (con hash y fecha de alta). */
+export type UsuarioMemoria = Omit<UsuarioConCredenciales, "clienteId"> & { clienteId?: string | null; creadoEn?: Date };
+
+/** Fecha de alta de los usuarios semilla en memoria. */
+const FECHA_USUARIOS_SEED = new Date("2026-10-01T00:00:00.000Z");
+
+const aUsuario = (u: UsuarioMemoria): Usuario => ({
+  id: u.id,
+  nombre: u.nombre,
+  email: u.email,
+  rol: u.rol,
+  clienteId: u.clienteId ?? null,
+});
+
+const aUsuarioAdmin = (u: UsuarioMemoria): UsuarioAdmin => ({
+  ...aUsuario(u),
+  activo: u.activo,
+  creadoEn: new Date(u.creadoEn ?? FECHA_USUARIOS_SEED),
+});
+
+const conCredenciales = (u: UsuarioMemoria): UsuarioConCredenciales => ({
+  ...aUsuario(u),
+  passwordHash: u.passwordHash,
+  activo: u.activo,
+});
+
 export class InMemoryUsuarioRepository implements UsuarioRepository {
-  constructor(private readonly usuarios: UsuarioConCredenciales[] = []) {}
+  private readonly usuarios: UsuarioMemoria[];
+
+  constructor(usuarios: UsuarioMemoria[] = []) {
+    this.usuarios = usuarios.map((u) => ({ ...u, clienteId: u.clienteId ?? null }));
+  }
 
   async buscarPorEmail(email: string): Promise<UsuarioConCredenciales | null> {
-    return this.usuarios.find((u) => u.email === email) ?? null;
+    const u = this.usuarios.find((x) => x.email === email);
+    return u ? conCredenciales(u) : null;
   }
 
   async buscarPorId(id: string): Promise<Usuario | null> {
     const u = this.usuarios.find((x) => x.id === id && x.activo);
-    return u ? { id: u.id, nombre: u.nombre, email: u.email, rol: u.rol } : null;
+    return u ? aUsuario(u) : null;
   }
 
   async buscarCredencialesPorId(id: string): Promise<UsuarioConCredenciales | null> {
     const u = this.usuarios.find((x) => x.id === id && x.activo);
-    return u ? { ...u } : null;
+    return u ? conCredenciales(u) : null;
   }
 
   async existeEmail(email: string, excluirId?: string): Promise<boolean> {
@@ -52,13 +88,70 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
     }
     if (cambios.nombre !== undefined) u.nombre = cambios.nombre;
     if (cambios.email !== undefined) u.email = cambios.email;
-    return { id: u.id, nombre: u.nombre, email: u.email, rol: u.rol };
+    return aUsuario(u);
   }
 
   async actualizarPasswordHash(id: string, passwordHash: string): Promise<void> {
     const u = this.usuarios.find((x) => x.id === id);
     if (u) u.passwordHash = passwordHash;
   }
+
+  async listar(filtro: FiltroUsuarios = {}): Promise<UsuarioAdmin[]> {
+    return this.usuarios
+      .filter((u) => filtro.rol === undefined || u.rol === filtro.rol)
+      .filter((u) => filtro.activo === undefined || u.activo === filtro.activo)
+      .filter((u) => filtro.clienteId === undefined || u.clienteId === filtro.clienteId)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es", { sensitivity: "base" }) || (a.id < b.id ? -1 : 1))
+      .map(aUsuarioAdmin);
+  }
+
+  async obtener(id: string): Promise<UsuarioAdmin | null> {
+    const u = this.usuarios.find((x) => x.id === id);
+    return u ? aUsuarioAdmin(u) : null;
+  }
+
+  async crear(usuario: UsuarioAdmin & { passwordHash: string }): Promise<void> {
+    if (await this.existeEmail(usuario.email)) {
+      throw new DomainError("CONFLICTO", "Ese correo ya está registrado por otro usuario");
+    }
+    this.usuarios.push({ ...usuario, creadoEn: new Date(usuario.creadoEn) });
+  }
+
+  async actualizar(id: string, c: CambiosUsuarioRepo): Promise<UsuarioAdmin> {
+    const u = this.usuarios.find((x) => x.id === id);
+    if (!u) throw new DomainError("NO_ENCONTRADO", "Usuario no encontrado");
+    if (c.email !== undefined && (await this.existeEmail(c.email, id))) {
+      throw new DomainError("CONFLICTO", "Ese correo ya está registrado por otro usuario");
+    }
+    if (c.nombre !== undefined) u.nombre = c.nombre;
+    if (c.email !== undefined) u.email = c.email;
+    if (c.rol !== undefined) u.rol = c.rol;
+    if (c.activo !== undefined) u.activo = c.activo;
+    if (c.passwordHash !== undefined) u.passwordHash = c.passwordHash;
+    return aUsuarioAdmin(u);
+  }
+
+  async accesosPortalPorCliente(): Promise<Map<string, number>> {
+    const mapa = new Map<string, number>();
+    for (const u of this.usuarios) {
+      if (u.rol === "CLIENTE" && u.activo && u.clienteId) mapa.set(u.clienteId, (mapa.get(u.clienteId) ?? 0) + 1);
+    }
+    return mapa;
+  }
+
+  /** Al eliminar un cliente: desactiva sus usuarios del portal y los desvincula. Devuelve cuántos estaban activos. */
+  desvincularCliente(clienteId: string): number {
+    let activos = 0;
+    for (const u of this.usuarios.filter((x) => x.clienteId === clienteId)) {
+      if (u.activo) activos++;
+      u.activo = false;
+      u.clienteId = null;
+    }
+    return activos;
+  }
+
+  /** Nombre actual de un usuario (cualquier estado), para resolver nombres al leer como lo hace un JOIN. */
+  nombre = (id: string): string | null => this.usuarios.find((u) => u.id === id)?.nombre ?? null;
 }
 
 /** Copia mutable de las ciudades semilla. Compártala entre el repo de ciudades y el de rutas. */
@@ -292,6 +385,10 @@ export interface OpcionesEnvioMemoria {
   outbox?: { encolar(entregas: EntregaWebhook[]): void };
   /** Nombre actual de una integración (para `Envio.origen.integracion`). */
   nombreIntegracion?: (id: string) => string | null;
+  /** Caja donde se registran los cobros al guardar (misma «transacción» que el envío). */
+  caja?: { validar(m: MovimientosCaja): void; aplicar(m: MovimientosCaja): void };
+  /** Nombre actual de un usuario (repartidor asignado). */
+  nombreUsuario?: (id: string) => string | null;
 }
 
 export class InMemoryEnvioRepository implements EnvioRepository {
@@ -310,19 +407,53 @@ export class InMemoryEnvioRepository implements EnvioRepository {
         throw new DomainError("CONFLICTO", `La guía ${s.numeroGuia} ya está registrada`);
       }
     } else {
-      // Como en Postgres: el origen y la referencia no cambian después de crear el envío.
+      // Como en Postgres: el origen y la referencia no cambian después de crear el envío; la asignación del
+      // repartidor solo cambia con asignarRepartidor, y los datos personales solo al anonimizar.
       const previo = this.datos.get(s.id)!;
       s.integracionId = previo.integracionId ?? null;
       s.referenciaExterna = previo.referenciaExterna ?? null;
+      s.repartidor = previo.repartidor ?? null;
+      s.asignadoEn = previo.asignadoEn ?? null;
+      if (previo.anonimizadoEn || !s.anonimizadoEn) {
+        s.anonimizadoEn = previo.anonimizadoEn ?? null;
+        s.remitente = previo.remitente;
+        s.destinatario = previo.destinatario;
+        s.descripcion = previo.descripcion;
+        if (previo.anonimizadoEn) s.historial = s.historial.map((ev) => ({ ...ev, nota: null }));
+      }
     }
+    if (opciones.caja) this.opciones.caja?.validar(opciones.caja);
     if (opciones.webhooks?.length) this.opciones.outbox?.encolar(opciones.webhooks);
-    this.datos.set(envio.id, { ...s, integracionNombre: null });
+    if (opciones.caja) this.opciones.caja?.aplicar(opciones.caja);
+    this.datos.set(envio.id, structuredClone({ ...s, integracionNombre: null }));
   }
 
-  /** Reconstruye con el nombre ACTUAL de la integración (como el JOIN de Postgres). */
+  async asignarRepartidor(envioIds: string[], repartidorId: string | null, fecha: Date): Promise<number> {
+    for (const id of envioIds) {
+      const p = this.datos.get(id);
+      if (!p) throw new DomainError("NO_ENCONTRADO", `Envío no encontrado: ${id}`);
+      if (esFinal(p.estado)) {
+        throw new DomainError("ESTADO_INVALIDO", `La guía ${p.numeroGuia} está ${p.estado}: no se puede asignar`);
+      }
+    }
+    const repartidor = repartidorId
+      ? { id: repartidorId, nombre: this.opciones.nombreUsuario?.(repartidorId) ?? "" }
+      : null;
+    for (const id of envioIds) {
+      const p = this.datos.get(id)!;
+      this.datos.set(id, { ...p, repartidor, asignadoEn: repartidor ? new Date(fecha) : null });
+    }
+    return envioIds.length;
+  }
+
+  /** Reconstruye con el nombre ACTUAL de la integración y del repartidor (como el JOIN de Postgres). */
   private leer(p: EnvioProps): Envio {
-    const nombre = p.integracionId ? (this.opciones.nombreIntegracion?.(p.integracionId) ?? null) : null;
-    return Envio.reconstruir({ ...p, integracionNombre: nombre });
+    const copia = structuredClone(p);
+    const nombre = copia.integracionId ? (this.opciones.nombreIntegracion?.(copia.integracionId) ?? null) : null;
+    const repartidor = copia.repartidor
+      ? { id: copia.repartidor.id, nombre: this.opciones.nombreUsuario?.(copia.repartidor.id) ?? copia.repartidor.nombre }
+      : null;
+    return Envio.reconstruir({ ...copia, integracionNombre: nombre, repartidor });
   }
 
   async buscarPorId(id: string): Promise<Envio | null> {
@@ -385,6 +516,21 @@ export class InMemoryEnvioRepository implements EnvioRepository {
       .filter((p) => !filtro.clienteId || p.clienteId === filtro.clienteId)
       .filter((p) => !filtro.canal || (filtro.canal === "API") === Boolean(p.integracionId))
       .filter((p) => !filtro.integracionId || p.integracionId === filtro.integracionId)
+      .filter(
+        (p) =>
+          filtro.repartidorId === undefined ||
+          (filtro.repartidorId === null ? !p.repartidor : p.repartidor?.id === filtro.repartidorId),
+      )
+      .filter((p) => !filtro.estados || filtro.estados.includes(p.estado))
+      .filter((p) => !filtro.actualizadoDesde || p.actualizadoEn >= filtro.actualizadoDesde)
+      .filter((p) => !filtro.actualizadoAntes || p.actualizadoEn < filtro.actualizadoAntes)
+      .filter((p) => filtro.anonimizado === undefined || Boolean(p.anonimizadoEn) === filtro.anonimizado)
+      .filter(
+        (p) =>
+          !filtro.telefono ||
+          digitosTelefono(p.remitente.telefono) === filtro.telefono ||
+          digitosTelefono(p.destinatario.telefono) === filtro.telefono,
+      )
       .filter(
         (p) =>
           !q ||

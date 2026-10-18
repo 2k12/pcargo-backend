@@ -1,3 +1,4 @@
+import { cobroAlRegistrar } from "../../../domain/caja/Caja.js";
 import type { Contacto, Destinatario } from "../../../domain/envio/Envio.js";
 import { Envio } from "../../../domain/envio/Envio.js";
 import { esFormaPago } from "../../../domain/envio/FormaPago.js";
@@ -41,6 +42,11 @@ export interface OpcionesRegistro {
   notaRegistro?: string;
   /** Modo prueba: valida y cotiza igual, pero no asigna guía, no guarda nada ni dispara webhooks. */
   simular?: boolean;
+  /**
+   * Envío del panel: si es PAGADO genera el cobro ORIGEN a nombre del operador (caja, v12). Los de la API de
+   * empresas y del portal se pagan por fuera y no generan cobro.
+   */
+  cobroOrigen?: boolean;
 }
 
 const MAX_INTENTOS_GUIA = 5;
@@ -57,7 +63,7 @@ export class CrearEnvio {
 
   /** Envío desde el panel. */
   async ejecutar(actor: Actor, s: SolicitudEnvio): Promise<EnvioDTO> {
-    const { envio, ruta } = await this.registrar(s, { actor });
+    const { envio, ruta } = await this.registrar(s, { actor, cobroOrigen: true });
     return toEnvioDTO(envio, ruta, true);
   }
 
@@ -99,11 +105,17 @@ export class CrearEnvio {
     const id = this.ids.uuid();
     Envio.crear(datos, { ...base, id, numeroGuia: 0 }); // valida remitente/destinatario antes de dar de alta un cliente
     const clienteId = await this.cliente(s);
+    let cobroId: string | undefined;
     for (let intento = 1; ; intento++) {
       const envio = Envio.crear({ ...datos, clienteId }, { ...base, id, numeroGuia: await this.numeroGuia(s.numeroGuia) });
       const webhooks = (await this.webhooks?.entregasPara(envio, ruta, "envio.creado")) ?? [];
+      // El cobro se guarda en la misma transacción que el envío (si el envío no se guarda, no hay cobro).
+      const cobro =
+        o.cobroOrigen && o.actor && envio.formaPago === "PAGADO"
+          ? cobroAlRegistrar(envio, { nuevoId: () => (cobroId ??= this.ids.uuid()), ahora: base.ahora, actor: o.actor })
+          : null;
       try {
-        await this.envios.guardar(envio, { webhooks });
+        await this.envios.guardar(envio, { webhooks, caja: { cobros: cobro ? [cobro] : [], anulaciones: [] } });
         return { envio, ruta };
       } catch (e) {
         // Dos registros simultáneos con guía automática pueden tomar el mismo consecutivo: se reintenta con otro.

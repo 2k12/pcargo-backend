@@ -25,7 +25,7 @@ export class Login {
     const { id, nombre, rol } = usuario;
     return {
       token: this.tokens.firmar({ id, nombre, rol }),
-      usuario: { id, nombre, email: usuario.email, rol },
+      usuario: { id, nombre, email: usuario.email, rol, clienteId: usuario.clienteId ?? null },
     };
   }
 }

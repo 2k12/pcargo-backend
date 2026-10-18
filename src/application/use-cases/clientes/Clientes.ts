@@ -7,7 +7,7 @@ import {
 } from "../../../domain/cliente/Cliente.js";
 import type { Envio } from "../../../domain/envio/Envio.js";
 import { DomainError, redondear2 } from "../../../domain/shared/DomainError.js";
-import type { ClienteRepository, EnvioRepository } from "../../ports/repositories.js";
+import type { ClienteRepository, EnvioRepository, UsuarioRepository } from "../../ports/repositories.js";
 import type { Clock, IdGenerator } from "../../ports/services.js";
 
 export interface ClienteDTO {
@@ -24,6 +24,8 @@ export interface ClienteDTO {
   /** Suma de los envíos no cancelados. */
   monto: number;
   ultimoEnvio: string | null;
+  /** Usuarios CLIENTE activos vinculados (v12). */
+  accesosPortal: number;
 }
 
 interface Estadistica {
@@ -46,7 +48,7 @@ function estadisticas(envios: Envio[]): Map<string, Estadistica> {
   return mapa;
 }
 
-export function toClienteDTO(c: Cliente, est?: Estadistica): ClienteDTO {
+export function toClienteDTO(c: Cliente, est?: Estadistica, accesosPortal = 0): ClienteDTO {
   return {
     id: c.id,
     nombre: c.nombre,
@@ -58,8 +60,11 @@ export function toClienteDTO(c: Cliente, est?: Estadistica): ClienteDTO {
     envios: est?.envios ?? 0,
     monto: redondear2(est?.monto ?? 0),
     ultimoEnvio: est?.ultimo?.toISOString() ?? null,
+    accesosPortal,
   };
 }
+
+const sinAccesos = async (): Promise<Map<string, number>> => new Map();
 
 /** Datos de alta de un cliente: `consentimiento` debe ser `true` (se valida aquí, no en la capa HTTP). */
 export type AltaCliente = DatosCliente & { consentimiento?: unknown };
@@ -76,12 +81,17 @@ export class ListarClientes {
   constructor(
     private readonly clientes: ClienteRepository,
     private readonly envios: EnvioRepository,
+    private readonly usuarios?: UsuarioRepository,
   ) {}
 
   async ejecutar(filtro: { q?: string } = {}): Promise<ClienteDTO[]> {
-    const [lista, envios] = await Promise.all([this.clientes.listar(filtro), this.envios.listar()]);
+    const [lista, envios, accesos] = await Promise.all([
+      this.clientes.listar(filtro),
+      this.envios.listar(),
+      this.usuarios ? this.usuarios.accesosPortalPorCliente() : sinAccesos(),
+    ]);
     const est = estadisticas(envios);
-    return lista.map((c) => toClienteDTO(c, est.get(c.id)));
+    return lista.map((c) => toClienteDTO(c, est.get(c.id), accesos.get(c.id) ?? 0));
   }
 }
 
@@ -133,6 +143,7 @@ export class ActualizarCliente {
     private readonly clientes: ClienteRepository,
     private readonly envios: EnvioRepository,
     private readonly clock: Clock,
+    private readonly usuarios?: UsuarioRepository,
   ) {}
 
   async ejecutar(id: string, { consentimiento, ...cambios }: CambiosCliente): Promise<ClienteDTO> {
@@ -144,16 +155,18 @@ export class ActualizarCliente {
     if (digitosTelefono(limpio.telefono) !== digitosTelefono(actual.telefono)) {
       await exigirTelefonoLibre(this.clientes, limpio.telefono, id);
     }
-    const [actualizado, envios] = await Promise.all([
+    const [actualizado, envios, accesos] = await Promise.all([
       this.clientes.actualizar(id, limpio),
       this.envios.listar({ clienteId: id }),
+      this.usuarios ? this.usuarios.accesosPortalPorCliente() : sinAccesos(),
     ]);
     // Si ya tenía consentimiento el repositorio conserva la fecha original.
     const cliente = registrar ? await this.clientes.registrarConsentimiento(id, this.clock.ahora()) : actualizado;
-    return toClienteDTO(cliente, estadisticas(envios).get(id));
+    return toClienteDTO(cliente, estadisticas(envios).get(id), accesos.get(id) ?? 0);
   }
 }
 
+/** Elimina el cliente: sus envíos se conservan y sus usuarios del portal se desactivan (v12). */
 export class EliminarCliente {
   constructor(private readonly clientes: ClienteRepository) {}
 

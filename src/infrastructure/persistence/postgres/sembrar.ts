@@ -1,5 +1,6 @@
 import type { Db } from "./pool.js";
-import { CIUDADES, RUTAS_SEED, TIPOS_CARGA_SEED, USUARIOS_SEED } from "../seed-data.js";
+import { digitosTelefono } from "../../../domain/cliente/Cliente.js";
+import { CIUDADES, CLIENTES_SEED, RUTAS_SEED, TIPOS_CARGA_SEED, USUARIOS_SEED } from "../seed-data.js";
 import { BcryptPasswordHasher } from "../../security/adapters.js";
 
 /** Idempotente: puede ejecutarse varias veces sin duplicar datos. */
@@ -36,11 +37,27 @@ export async function sembrar(db: Db, rondasBcrypt = 10): Promise<void> {
     );
   }
 
+  // v12: cliente semilla del portal. ON CONFLICT sin destino: tampoco duplica si otro cliente ya tiene su teléfono.
+  const idClientePorSemilla = new Map<string, string>();
+  for (const c of CLIENTES_SEED) {
+    await db.query(
+      `INSERT INTO clientes (id, nombre, telefono, direccion, notas, creado_en, consentimiento_en)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
+      [c.id, c.nombre, c.telefono, c.direccion, c.notas, c.creadoEn, c.consentimientoEn],
+    );
+    const { rows: existente } = await db.query<{ id: string }>(
+      "SELECT id FROM clientes WHERE regexp_replace(telefono, '[^0-9]', '', 'g') = $1",
+      [digitosTelefono(c.telefono)],
+    );
+    if (existente[0]) idClientePorSemilla.set(c.id, existente[0].id);
+  }
+
+  // Usuarios: solo se crean si su correo no existe (nunca se sobrescriben contraseñas ni roles cambiados).
   for (const u of USUARIOS_SEED) {
     await db.query(
-      `INSERT INTO usuarios (id, nombre, email, password_hash, rol)
-       VALUES ($1, $2, $3, $4, $5) ON CONFLICT (email) DO NOTHING`,
-      [u.id, u.nombre, u.email, await hasher.hash(u.password), u.rol],
+      `INSERT INTO usuarios (id, nombre, email, password_hash, rol, cliente_id)
+       VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+      [u.id, u.nombre, u.email, await hasher.hash(u.password), u.rol, u.clienteId ? (idClientePorSemilla.get(u.clienteId) ?? null) : null],
     );
   }
 }

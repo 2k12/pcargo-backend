@@ -7,7 +7,15 @@ import type { FormaPago } from "../../domain/envio/FormaPago.js";
 import type { Canal } from "../../domain/integracion/Integracion.js";
 import type { EntregaWebhook } from "../../domain/integracion/Webhook.js";
 import type { Ciudad, Ruta } from "../../domain/ruta/Ruta.js";
-import type { CambiosPerfil, Usuario, UsuarioConCredenciales } from "../../domain/usuario/Usuario.js";
+import type { Cobro, CierreCaja, MovimientosCaja } from "../../domain/caja/Caja.js";
+import type { ConfiguracionDatos, SolicitudDatos, UltimaDepuracion } from "../../domain/datos/DatosPersonales.js";
+import type {
+  CambiosPerfil,
+  Rol,
+  Usuario,
+  UsuarioAdmin,
+  UsuarioConCredenciales,
+} from "../../domain/usuario/Usuario.js";
 
 // Puertos de salida (driven ports). Los adaptadores viven en infrastructure/persistence.
 
@@ -22,6 +30,32 @@ export interface UsuarioRepository {
   /** Aplica los cambios presentes y devuelve el usuario. Correo repetido → DomainError("CONFLICTO"). */
   actualizarPerfil(id: string, cambios: CambiosPerfil): Promise<Usuario>;
   actualizarPasswordHash(id: string, passwordHash: string): Promise<void>;
+
+  // ── Gestión de usuarios (v12, ADMIN) ──
+  /** Activos e inactivos, ordenados por nombre (orden estable por id). */
+  listar(filtro?: FiltroUsuarios): Promise<UsuarioAdmin[]>;
+  /** Cualquier estado (activo o no). */
+  obtener(id: string): Promise<UsuarioAdmin | null>;
+  /** Correo repetido → DomainError("CONFLICTO"). */
+  crear(usuario: UsuarioAdmin & { passwordHash: string }): Promise<void>;
+  /** Aplica los cambios presentes. Correo repetido → DomainError("CONFLICTO"). */
+  actualizar(id: string, cambios: CambiosUsuarioRepo): Promise<UsuarioAdmin>;
+  /** Usuarios CLIENTE activos por cliente (solo los clientes que tienen alguno). */
+  accesosPortalPorCliente(): Promise<Map<string, number>>;
+}
+
+export interface FiltroUsuarios {
+  rol?: Rol;
+  activo?: boolean;
+  clienteId?: string;
+}
+
+export interface CambiosUsuarioRepo {
+  nombre?: string;
+  email?: string;
+  rol?: Rol;
+  activo?: boolean;
+  passwordHash?: string;
 }
 
 export interface CambiosCiudad {
@@ -110,6 +144,19 @@ export interface FiltroEnvios {
   /** PANEL (sin integración) o API. */
   canal?: Canal;
   integracionId?: string;
+  // ── v12 ──
+  /** Id del repartidor asignado; `null` = sin asignar. */
+  repartidorId?: string | null;
+  /** Cualquiera de estos estados (se combina con `estado` mediante AND). */
+  estados?: EstadoEnvio[];
+  /** `actualizadoEn` ≥ este instante. */
+  actualizadoDesde?: Date;
+  /** `actualizadoEn` < este instante. */
+  actualizadoAntes?: Date;
+  /** true: solo anonimizados; false: solo con datos personales. */
+  anonimizado?: boolean;
+  /** Dígitos del teléfono del remitente o del destinatario (comparando solo dígitos). */
+  telefono?: string;
 }
 
 export interface Paginacion {
@@ -124,6 +171,8 @@ export interface OpcionesGuardarEnvio {
    * tampoco se encolan; si se guarda, un reinicio no los pierde.
    */
   webhooks?: EntregaWebhook[];
+  /** Cobros a registrar y cobros ORIGEN a anular (caja, v12), en la MISMA transacción que el cambio del envío. */
+  caja?: MovimientosCaja;
 }
 
 export interface EstadisticaIntegracion {
@@ -151,6 +200,11 @@ export interface EnvioRepository {
   listar(filtro?: FiltroEnvios): Promise<Envio[]>;
   /** Una página de resultados (más recientes primero, orden estable) y el total que cumple el filtro. */
   listarPagina(filtro: FiltroEnvios, paginacion: Paginacion): Promise<{ envios: Envio[]; total: number }>;
+  /**
+   * Asigna (o quita, con null) el repartidor de todos los envíos indicados, de forma atómica: si alguno no existe
+   * (NO_ENCONTRADO) o está en un estado final (ESTADO_INVALIDO) no se asigna ninguno. Devuelve cuántos se asignaron.
+   */
+  asignarRepartidor(envioIds: string[], repartidorId: string | null, fecha: Date): Promise<number>;
 }
 
 export interface ClienteRepository {
@@ -163,6 +217,43 @@ export interface ClienteRepository {
   actualizar(id: string, datos: Required<DatosCliente>): Promise<Cliente>;
   /** Registra el consentimiento solo si aún no tenía (conserva la fecha original). Devuelve el cliente. */
   registrarConsentimiento(id: string, fecha: Date): Promise<Cliente>;
-  /** Los envíos del cliente se conservan sin cliente asociado. */
-  eliminar(id: string): Promise<void>;
+  /**
+   * Los envíos del cliente se conservan sin cliente asociado y sus usuarios del portal se desactivan y quedan con
+   * `clienteId: null` (atómico). Devuelve cuántos usuarios activos se desactivaron.
+   */
+  eliminar(id: string): Promise<number>;
+}
+
+/** Caja (v12): cobros y cierres. Los cobros se registran al guardar el envío (OpcionesGuardarEnvio.caja). */
+export interface CajaRepository {
+  cobrosDeEnvio(envioId: string): Promise<Cobro[]>;
+  /** Cobros sin cierre (de una persona o de todas), por fecha ascendente y id. */
+  pendientes(usuarioId?: string): Promise<Cobro[]>;
+  /**
+   * Cierre atómico: toma TODOS los cobros pendientes de la persona (bloqueados: un cobro nunca queda en dos cierres),
+   * llama a `fabricar` con ellos (puede lanzar, p. ej. SIN_COBROS) y guarda el cierre marcándolos.
+   */
+  cerrar(usuarioId: string, fabricar: (pendientes: Cobro[]) => CierreCaja): Promise<{ cierre: CierreCaja; cobros: Cobro[] }>;
+  /** Más recientes primero (orden estable por id). `hasta` es exclusivo. */
+  listarCierres(filtro: FiltroCierres, paginacion: Paginacion): Promise<{ cierres: CierreCaja[]; total: number }>;
+  buscarCierre(id: string): Promise<CierreCaja | null>;
+  cobrosDeCierre(cierreId: string): Promise<Cobro[]>;
+}
+
+export interface FiltroCierres {
+  usuarioId?: string;
+  desde?: Date;
+  /** Exclusivo. */
+  hasta?: Date;
+}
+
+/** Datos personales (v12, LOPDP): política de retención, última depuración y solicitudes atendidas. */
+export interface DatosPersonalesRepository {
+  /** Con los valores por defecto si nunca se configuró (12 meses, sin depuraciones). */
+  obtenerConfiguracion(): Promise<ConfiguracionDatos>;
+  guardarMesesRetencion(meses: number): Promise<void>;
+  registrarDepuracion(depuracion: UltimaDepuracion): Promise<void>;
+  crearSolicitud(solicitud: SolicitudDatos): Promise<void>;
+  /** Más recientes primero (orden estable por id). */
+  listarSolicitudes(paginacion: Paginacion): Promise<{ solicitudes: SolicitudDatos[]; total: number }>;
 }

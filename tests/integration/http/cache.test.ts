@@ -119,6 +119,41 @@ describe.each(almacenes)("Caché y límite de tasa (%s)", (_nombre, crearAlmacen
     expect(cot).toMatchObject({ zona: "RURAL", costo: 3 });
   });
 
+  it("v12: el repartidor, el portal y la eliminación de datos personales invalidan seguimiento y dashboard", async () => {
+    const entrar = async (email: string, password: string) =>
+      (await request(app).post("/api/auth/login").send({ email, password }).expect(200)).body.token as string;
+    const tokenRepartidor = await entrar("repartidor@pcargo.ec", "Repartidor123!");
+    const tokenPortal = await entrar("portal@pcargo.ec", "Portal123!");
+    const { body: envio } = await request(app).post("/api/envios").set(auth(token)).send(solicitudEnvio()).expect(201);
+    await request(app).patch(`/api/envios/${envio.id}/estado`).set(auth(token)).send({ estado: "EN_TRANSITO", nota: "Bus de las 10" }).expect(200);
+    await request(app)
+      .post("/api/envios/asignar")
+      .set(auth(token))
+      .send({ envioIds: [envio.id], repartidorId: "00000000-0000-4000-8000-000000000003" })
+      .expect(200);
+    const guia = `/api/seguimiento/${envio.numeroGuia}`;
+    expect((await request(app).get(guia).expect(200)).body.estado).toBe("EN_TRANSITO"); // queda en caché
+    await request(app).patch(`/api/repartidor/envios/${envio.id}/estado`).set(auth(tokenRepartidor)).send({ estado: "EN_REPARTO" }).expect(200);
+    expect((await request(app).get(guia).expect(200)).body.estado).toBe("EN_REPARTO");
+
+    const antes = (await request(app).get("/api/dashboard/resumen").set(auth(token)).expect(200)).body.totalEnvios;
+    await request(app)
+      .post("/api/portal/envios")
+      .set(auth(tokenPortal))
+      .send({ destinatario: { nombre: "Ana", telefono: "0987654321", direccion: "Quito" }, rutaId: 11, items: [{ tipoCarga: "SOBRE", cantidad: 1, pesoKg: 0.1 }] })
+      .expect(201);
+    expect((await request(app).get("/api/dashboard/resumen").set(auth(token)).expect(200)).body.totalEnvios).toBe(antes + 1);
+
+    await request(app).patch(`/api/repartidor/envios/${envio.id}/estado`).set(auth(tokenRepartidor)).send({ estado: "ENTREGADO" }).expect(200);
+    expect((await request(app).get(guia).expect(200)).body.historial[1].nota).toBe("Bus de las 10");
+    await request(app)
+      .post("/api/datos-personales/solicitudes")
+      .set(auth(tokenAdmin))
+      .send({ telefono: solicitudEnvio().remitente.telefono, nombreTitular: "María Pérez", canal: "PRESENCIAL" })
+      .expect(201);
+    expect((await request(app).get(guia).expect(200)).body.historial.every((h: { nota: string | null }) => h.nota === null)).toBe(true);
+  });
+
   it("limita los intentos de login por IP y correo con 429 DEMASIADAS_SOLICITUDES", async () => {
     const intento = () => request(app).post("/api/auth/login").send({ email: "nadie@pcargo.ec", password: "x" });
     for (let i = 0; i < 10; i++) await intento().expect(401);

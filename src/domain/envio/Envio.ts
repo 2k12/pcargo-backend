@@ -5,6 +5,7 @@ import { DomainError, redondear2 } from "../shared/DomainError.js";
 import { ZONA_POR_DEFECTO, type Zona } from "../tarifa/Zona.js";
 import type { Actor } from "../usuario/Usuario.js";
 import {
+  esFinal,
   esResultadoEntrega,
   puedeTransicionar,
   REQUIEREN_NOTA,
@@ -84,7 +85,15 @@ export interface EnvioProps {
   integracionNombre?: string | null;
   /** Número de pedido de la empresa (solo canal API; único por integración). */
   referenciaExterna?: string | null;
+  /** Repartidor asignado (v12); el nombre lo resuelve el repositorio al leer. */
+  repartidor?: { id: string; nombre: string } | null;
+  asignadoEn?: Date | null;
+  /** Cuándo se eliminaron sus datos personales (retención o solicitud del titular, v12). */
+  anonimizadoEn?: Date | null;
 }
+
+/** Texto que reemplaza los nombres (y la dirección de entrega, obligatoria) al anonimizar. */
+export const ANONIMIZADO = "Anonimizado";
 
 export interface NuevoEnvio {
   remitente: Remitente;
@@ -168,6 +177,9 @@ export class Envio {
       integracionId: integracion?.id ?? null,
       integracionNombre: integracion?.nombre ?? null,
       referenciaExterna,
+      repartidor: null,
+      asignadoEn: null,
+      anonimizadoEn: null,
     });
   }
 
@@ -178,7 +190,44 @@ export class Envio {
       items: [...props.items],
       historial: [...props.historial],
       evidencia: props.evidencia ? { ...props.evidencia } : null,
+      repartidor: props.repartidor ? { ...props.repartidor } : null,
+      asignadoEn: props.asignadoEn ?? null,
+      anonimizadoEn: props.anonimizadoEn ?? null,
     });
+  }
+
+  /**
+   * Asigna (o quita, con null) el repartidor. No agrega eventos al historial ni cambia `actualizadoEn`.
+   * Un envío en estado final no se asigna → ESTADO_INVALIDO.
+   */
+  asignarRepartidor(repartidor: { id: string; nombre: string } | null, ahora: Date): void {
+    if (esFinal(this.props.estado)) {
+      throw new DomainError(
+        "ESTADO_INVALIDO",
+        `La guía ${this.props.numeroGuia} está ${this.props.estado}: no se puede asignar a un repartidor`,
+      );
+    }
+    this.props.repartidor = repartidor ? { ...repartidor } : null;
+    this.props.asignadoEn = repartidor ? ahora : null;
+  }
+
+  /**
+   * Elimina los datos personales (LOPDP): nombres, teléfonos y direcciones, descripción, notas del historial y
+   * evidencia. Conserva guía, ruta, ítems, costos, forma de pago, estados y fechas. Solo en estado final.
+   * Devuelve la evidencia que tenía (su foto debe borrarse del almacén); idempotente.
+   */
+  anonimizar(ahora: Date): EvidenciaEntrega | null {
+    if (!esFinal(this.props.estado)) {
+      throw new DomainError("ESTADO_INVALIDO", "Solo se anonimizan envíos terminados (ENTREGADO o CANCELADO)");
+    }
+    const evidencia = this.props.evidencia ?? null;
+    this.props.remitente = { nombre: ANONIMIZADO, telefono: "", direccion: null };
+    this.props.destinatario = { nombre: ANONIMIZADO, telefono: "", direccion: ANONIMIZADO };
+    this.props.descripcion = null;
+    this.props.historial = this.props.historial.map((ev) => ({ ...ev, nota: null }));
+    this.props.evidencia = null;
+    this.props.anonimizadoEn ??= ahora;
+    return evidencia;
   }
 
   cambiarEstado(nuevo: EstadoEnvio, ctx: { ahora: Date; actor: Actor; nota?: string | null }): void {
@@ -208,6 +257,9 @@ export class Envio {
     ctx: { ahora: Date; actor: Actor },
   ): EvidenciaEntrega | null {
     const recibidoPor = normalizarRecibidoPor(datos.recibidoPor);
+    if (this.props.anonimizadoEn) {
+      throw new DomainError("ESTADO_INVALIDO", "Los datos personales de este envío ya se eliminaron");
+    }
     if (this.props.estado !== "ENTREGADO") {
       throw new DomainError(
         "ESTADO_INVALIDO",
@@ -241,6 +293,30 @@ export class Envio {
 
   get referenciaExterna(): string | null {
     return this.props.referenciaExterna ?? null;
+  }
+
+  get repartidor(): { id: string; nombre: string } | null {
+    return this.props.repartidor ? { ...this.props.repartidor } : null;
+  }
+
+  get asignadoEn(): Date | null {
+    return this.props.asignadoEn ?? null;
+  }
+
+  get anonimizadoEn(): Date | null {
+    return this.props.anonimizadoEn ?? null;
+  }
+
+  get formaPago(): FormaPago {
+    return this.props.formaPago;
+  }
+
+  get costo(): number {
+    return this.props.costo;
+  }
+
+  get actualizadoEn(): Date {
+    return this.props.actualizadoEn;
   }
 
   get evidencia(): EvidenciaEntrega | null {
@@ -299,6 +375,7 @@ export class Envio {
       items: [...this.props.items],
       historial: [...this.props.historial],
       evidencia: this.props.evidencia ? { ...this.props.evidencia } : null,
+      repartidor: this.props.repartidor ? { ...this.props.repartidor } : null,
     };
   }
 }

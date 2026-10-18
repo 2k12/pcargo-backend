@@ -1,8 +1,20 @@
 import type { ClienteRepository } from "../../../application/ports/repositories.js";
 import { digitosTelefono, type Cliente, type DatosCliente } from "../../../domain/cliente/Cliente.js";
 
+export interface OpcionesClienteMemoria {
+  /** Al eliminar: desactiva y desvincula sus usuarios del portal (en Postgres va en la misma transacción). */
+  alEliminar?: (clienteId: string) => number;
+}
+
 export class InMemoryClienteRepository implements ClienteRepository {
   private readonly datos = new Map<string, Cliente>();
+
+  constructor(
+    semilla: readonly Cliente[] = [],
+    private readonly opciones: OpcionesClienteMemoria = {},
+  ) {
+    for (const c of semilla) this.datos.set(c.id, { ...c });
+  }
 
   async listar(filtro: { q?: string } = {}): Promise<Cliente[]> {
     const q = filtro.q?.trim().toLowerCase();
@@ -44,7 +56,8 @@ export class InMemoryClienteRepository implements ClienteRepository {
     return { ...c };
   }
 
-  async eliminar(id: string): Promise<void> {
-    this.datos.delete(id);
+  async eliminar(id: string): Promise<number> {
+    if (!this.datos.delete(id)) return 0;
+    return this.opciones.alEliminar?.(id) ?? 0;
   }
 }

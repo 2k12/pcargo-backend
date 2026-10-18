@@ -90,7 +90,25 @@ export class PgClienteRepository implements ClienteRepository {
     return aCliente(rows[0]!);
   }
 
-  async eliminar(id: string): Promise<void> {
-    await this.db.query("DELETE FROM clientes WHERE id = $1", [id]);
+  /** Desactiva y desvincula sus usuarios del portal y elimina el cliente en una transacción (v12). */
+  async eliminar(id: string): Promise<number> {
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query<{ n: number }>(
+        `WITH previos AS (SELECT id, activo FROM usuarios WHERE cliente_id = $1 FOR UPDATE),
+              cambio AS (UPDATE usuarios u SET activo = FALSE, cliente_id = NULL FROM previos p WHERE u.id = p.id)
+         SELECT count(*) FILTER (WHERE activo)::int AS n FROM previos`,
+        [id],
+      );
+      await client.query("DELETE FROM clientes WHERE id = $1", [id]);
+      await client.query("COMMIT");
+      return rows[0]?.n ?? 0;
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 }

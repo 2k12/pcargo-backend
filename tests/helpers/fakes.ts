@@ -27,6 +27,14 @@ export const hasherFalso: PasswordHasher = {
 
 export const ADMIN: Actor = { id: USUARIOS_SEED[0]!.id, nombre: USUARIOS_SEED[0]!.nombre, rol: "ADMIN" };
 export const OPERADOR: Actor = { id: USUARIOS_SEED[1]!.id, nombre: USUARIOS_SEED[1]!.nombre, rol: "OPERADOR" };
+/** v12: repartidor y usuario del portal semilla (vinculado a «Textiles Atuntaqui»). */
+export const REPARTIDOR: Actor = { id: USUARIOS_SEED[2]!.id, nombre: USUARIOS_SEED[2]!.nombre, rol: "REPARTIDOR" };
+export const PORTAL: Actor = {
+  id: USUARIOS_SEED[3]!.id,
+  nombre: USUARIOS_SEED[3]!.nombre,
+  rol: "CLIENTE",
+  clienteId: USUARIOS_SEED[3]!.clienteId,
+};
 
 export const solicitudEnvio = (sobrescribir: Record<string, unknown> = {}) => ({
   remitente: { nombre: "María Pérez", telefono: "0991234567" },
