@@ -43,24 +43,14 @@ const entregar = async (id: string, conFoto = false) => {
   if (conFoto) await c.subirEvidencia.ejecutar(OPERADOR, id, { foto: IMAGENES.jpeg, recibidoPor: "Rosa Vera" });
 };
 
-describe("Política de retención (plazo declarado, v13)", () => {
-  it("12 meses por defecto, configurable entre 12 y 120; la respuesta es solo { mesesRetencion }", async () => {
-    expect(await c.obtenerPoliticaDatos.ejecutar(ADMIN)).toEqual({ mesesRetencion: 12 });
-    expect(await c.actualizarPoliticaDatos.ejecutar(ADMIN, 24)).toEqual({ mesesRetencion: 24 });
-    expect(await c.obtenerPoliticaDatos.ejecutar(ADMIN)).toEqual({ mesesRetencion: 24 });
-    await expect(c.actualizarPoliticaDatos.ejecutar(ADMIN, 11)).rejects.toMatchObject({ code: "VALIDACION" });
-    await expect(c.actualizarPoliticaDatos.ejecutar(ADMIN, 121)).rejects.toMatchObject({ code: "VALIDACION" });
-    await expect(c.obtenerPoliticaDatos.ejecutar(OPERADOR)).rejects.toMatchObject({ code: "PROHIBIDO" });
-  });
-
-  it("vencido el plazo, el sistema no anonimiza ni elimina nada por su cuenta (no hay caso de depuración)", async () => {
+describe("Sin eliminación automática (v13/v14)", () => {
+  it("con el tiempo, el sistema no anonimiza ni elimina nada por su cuenta (no hay depuración ni plazo)", async () => {
     expect(c).not.toHaveProperty("depurarDatos");
+    expect(c).not.toHaveProperty("obtenerPoliticaDatos");
     const e = await crearEnvio({ guardarCliente: true, consentimientoCliente: true });
     await entregar(e.id, true);
     const claveFoto = (await a.envios.buscarPorId(e.id))!.evidencia!.clave;
     clock.avanzar(13 * MES_MIN);
-    await c.obtenerPoliticaDatos.ejecutar(ADMIN);
-    await c.actualizarPoliticaDatos.ejecutar(ADMIN, 12);
     expect(await c.obtenerEnvio.ejecutar(e.id)).toMatchObject({ remitente: { nombre: "María Pérez" }, anonimizadoEn: null });
     expect(await almacen.obtener(claveFoto)).not.toBeNull();
     expect((await c.listarClientes.ejecutar({ q: "María" })).length).toBe(1);

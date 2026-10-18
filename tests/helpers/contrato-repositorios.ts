@@ -1032,10 +1032,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(await repos.caja.buscarCierre("00000000-0000-4000-c400-0000000000ff")).toBeNull();
     });
 
-    it("datos personales: configuración por defecto, plazo declarado y solicitudes paginadas", async () => {
-      expect(await repos.datosPersonales.obtenerConfiguracion()).toEqual({ mesesRetencion: 12 });
-      await repos.datosPersonales.guardarMesesRetencion(36);
-      expect(await repos.datosPersonales.obtenerConfiguracion()).toEqual({ mesesRetencion: 36 });
+    it("datos personales: solicitudes atendidas paginadas", async () => {
       const solicitud = (n: number, min: number) => ({
         id: `00000000-0000-4000-c500-${String(n).padStart(12, "0")}`,
         tipo: "ELIMINACION" as const,

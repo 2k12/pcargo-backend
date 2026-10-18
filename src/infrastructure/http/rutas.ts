@@ -45,7 +45,6 @@ import {
   filtroEnviosPortalSchema,
   filtroResumenPortalSchema,
   filtroUsuariosSchema,
-  politicaDatosSchema,
   solicitudDatosSchema,
   titularSchema,
   vistaRepartidorSchema,
@@ -404,15 +403,6 @@ export function crearRouter(c: CasosDeUso, opciones: OpcionesRouter = {}): Route
   });
 
   // ── Datos personales (LOPDP, solo ADMIN; v13: sin depuración automática) ──
-  panel.get("/datos-personales/politica", soloAdmin, async (_req, res) => {
-    res.json(await c.obtenerPoliticaDatos.ejecutar(actorDe(res)));
-  });
-
-  panel.put("/datos-personales/politica", soloAdmin, async (req, res) => {
-    const { mesesRetencion } = politicaDatosSchema.parse(req.body);
-    res.json(await c.actualizarPoliticaDatos.ejecutar(actorDe(res), mesesRetencion));
-  });
-
   // El teléfono del titular es un dato personal: la respuesta no se guarda en cachés.
   panel.get("/datos-personales/titular", soloAdmin, async (req, res) => {
     const { telefono } = titularSchema.parse(req.query);

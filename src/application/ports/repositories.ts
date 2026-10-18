@@ -8,7 +8,7 @@ import type { Canal } from "../../domain/integracion/Integracion.js";
 import type { EntregaWebhook } from "../../domain/integracion/Webhook.js";
 import type { Ciudad, Ruta } from "../../domain/ruta/Ruta.js";
 import type { Cobro, CierreCaja, MovimientosCaja } from "../../domain/caja/Caja.js";
-import type { ConfiguracionDatos, SolicitudDatos } from "../../domain/datos/DatosPersonales.js";
+import type { SolicitudDatos } from "../../domain/datos/DatosPersonales.js";
 import type {
   CambiosPerfil,
   Rol,
@@ -245,9 +245,6 @@ export interface FiltroCierres {
 
 /** Datos personales (LOPDP): plazo de conservación declarado y solicitudes del titular atendidas. */
 export interface DatosPersonalesRepository {
-  /** Con el valor por defecto si nunca se configuró (12 meses). */
-  obtenerConfiguracion(): Promise<ConfiguracionDatos>;
-  guardarMesesRetencion(meses: number): Promise<void>;
   crearSolicitud(solicitud: SolicitudDatos): Promise<void>;
   /** Más recientes primero (orden estable por id). */
   listarSolicitudes(paginacion: Paginacion): Promise<{ solicitudes: SolicitudDatos[]; total: number }>;

@@ -2,7 +2,6 @@ import type { Cliente } from "../../../domain/cliente/Cliente.js";
 import {
   digitosTitular,
   normalizarSolicitud,
-  validarMesesRetencion,
   type DatosSolicitud,
   type SolicitudDatos,
 } from "../../../domain/datos/DatosPersonales.js";
@@ -31,10 +30,6 @@ export interface DepsDatos {
   almacen: AlmacenArchivos;
   ids: IdGenerator;
   clock: Clock;
-}
-
-export interface PoliticaDatosDTO {
-  mesesRetencion: number;
 }
 
 export interface DatosTitularDTO {
@@ -67,30 +62,6 @@ async function anonimizarEnvios(d: DepsDatos, envios: Envio[], ahora: Date): Pro
     }
   }
   return { envios: envios.length, evidencias };
-}
-
-async function politica(d: DepsDatos): Promise<PoliticaDatosDTO> {
-  const { mesesRetencion } = await d.datos.obtenerConfiguracion();
-  return { mesesRetencion };
-}
-
-export class ObtenerPoliticaDatos {
-  constructor(private readonly d: DepsDatos) {}
-
-  async ejecutar(actor: Actor): Promise<PoliticaDatosDTO> {
-    exigirRol(actor, SOLO_ADMIN);
-    return politica(this.d);
-  }
-}
-
-export class ActualizarPoliticaDatos {
-  constructor(private readonly d: DepsDatos) {}
-
-  async ejecutar(actor: Actor, mesesRetencion: number): Promise<PoliticaDatosDTO> {
-    exigirRol(actor, SOLO_ADMIN);
-    await this.d.datos.guardarMesesRetencion(validarMesesRetencion(mesesRetencion));
-    return politica(this.d);
-  }
 }
 
 /** Envíos asociados a un teléfono (remitente o destinatario, por dígitos) o al cliente con ese teléfono. */

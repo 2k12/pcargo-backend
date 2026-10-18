@@ -6,7 +6,7 @@ import {
   resumirCobros,
   type Cobro,
 } from "../../../src/domain/caja/Caja.js";
-import { normalizarSolicitud, telefonoFinal, validarMesesRetencion } from "../../../src/domain/datos/DatosPersonales.js";
+import { normalizarSolicitud, telefonoFinal } from "../../../src/domain/datos/DatosPersonales.js";
 import { ANONIMIZADO, Envio, type NuevoEnvio } from "../../../src/domain/envio/Envio.js";
 import { fechaLocalEC, inicioDiaEC, inicioMesEC } from "../../../src/domain/shared/FechaEcuador.js";
 import {
@@ -257,13 +257,7 @@ describe("Anonimización (LOPDP)", () => {
   });
 });
 
-describe("Retención y solicitudes", () => {
-  it("plazo de 12 a 120 meses", () => {
-    expect(validarMesesRetencion(12)).toBe(12);
-    expect(validarMesesRetencion(120)).toBe(120);
-    for (const malo of [11, 121, 12.5]) expect(() => validarMesesRetencion(malo)).toThrow(expect.objectContaining({ code: "VALIDACION" }));
-  });
-
+describe("Solicitudes del titular (datos)", () => {
   it("del teléfono solo quedan los 4 últimos dígitos; datos de la solicitud", () => {
     expect(telefonoFinal("099 123-4567")).toBe("…4567");
     expect(() => telefonoFinal("12345")).toThrow(expect.objectContaining({ code: "VALIDACION" }));

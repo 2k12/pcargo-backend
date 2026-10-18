@@ -72,7 +72,7 @@ describe("Roles (v12)", () => {
       ["get", "/api/usuarios/repartidores"],
       ["post", "/api/envios/asignar"],
       ["get", "/api/caja/pendientes"],
-      ["get", "/api/datos-personales/politica"],
+      ["get", "/api/datos-personales/solicitudes"],
     ];
     for (const token of [tokenRepartidor, tokenPortal]) {
       for (const [metodo, ruta] of rutas) {
@@ -94,7 +94,7 @@ describe("Roles (v12)", () => {
   });
 
   it("OPERADOR no administra usuarios, accesos ni datos personales (403)", async () => {
-    for (const ruta of ["/api/usuarios", `/api/clientes/${TEXTILES}/accesos`, "/api/datos-personales/politica", "/api/datos-personales/solicitudes"]) {
+    for (const ruta of ["/api/usuarios", `/api/clientes/${TEXTILES}/accesos`, "/api/datos-personales/solicitudes"]) {
       expect((await request(app).get(ruta).set(auth(tokenOperador))).status).toBe(403);
     }
     // pero sí lista repartidores y usa la caja
@@ -285,16 +285,9 @@ describe("Caja (v12)", () => {
 });
 
 describe("Datos personales (v12/v13)", () => {
-  it("política declarada, consulta del titular y solicitudes de eliminación", async () => {
-    expect((await request(app).get("/api/datos-personales/politica").set(auth(tokenAdmin)).expect(200)).body).toEqual({
-      mesesRetencion: 12,
-    });
-    await request(app).put("/api/datos-personales/politica").set(auth(tokenAdmin)).send({ mesesRetencion: 11 }).expect(400);
-    await request(app).put("/api/datos-personales/politica").set(auth(tokenAdmin)).send({ mesesRetencion: 121 }).expect(400);
-    expect((await request(app).put("/api/datos-personales/politica").set(auth(tokenAdmin)).send({ mesesRetencion: 24 }).expect(200)).body).toEqual({
-      mesesRetencion: 24,
-    });
-    expect((await request(app).get("/api/datos-personales/politica").set(auth(tokenAdmin)).expect(200)).body).toEqual({ mesesRetencion: 24 });
+  it("consulta del titular y solicitudes de eliminación (sin plazo de conservación, v14)", async () => {
+    await request(app).get("/api/datos-personales/politica").set(auth(tokenAdmin)).expect(404);
+    await request(app).put("/api/datos-personales/politica").set(auth(tokenAdmin)).send({ mesesRetencion: 24 }).expect(404);
 
     const e = await crearEnvio();
     await estado(e.id, "EN_TRANSITO", "Sale en el bus");

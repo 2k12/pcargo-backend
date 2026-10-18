@@ -1,24 +1,7 @@
 import { digitosTelefono } from "../cliente/Cliente.js";
 import { DomainError } from "../shared/DomainError.js";
 
-// Retención declarada y eliminación de datos personales a pedido del titular (LOPDP, contratos v12/v13).
-
-export const RETENCION_MESES = { min: 12, max: 120, defecto: 12 } as const;
-
-export function validarMesesRetencion(meses: number): number {
-  if (!Number.isInteger(meses) || meses < RETENCION_MESES.min || meses > RETENCION_MESES.max) {
-    throw new DomainError(
-      "VALIDACION",
-      `El plazo de conservación debe ser un entero entre ${RETENCION_MESES.min} y ${RETENCION_MESES.max} meses`,
-    );
-  }
-  return meses;
-}
-
-/** Plazo de conservación declarado (informativo): no dispara ninguna eliminación automática (v13). */
-export interface ConfiguracionDatos {
-  mesesRetencion: number;
-}
+// Eliminación de datos personales a pedido del titular (LOPDP, contratos v12–v14).
 
 export const CANALES_SOLICITUD = ["PRESENCIAL", "CORREO", "TELEFONO", "WHATSAPP"] as const;
 export type CanalSolicitud = (typeof CANALES_SOLICITUD)[number];

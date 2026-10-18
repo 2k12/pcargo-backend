@@ -8,7 +8,7 @@ import { FORMAS_PAGO } from "../../domain/envio/FormaPago.js";
 import { MAX_CANTIDAD, MAX_ITEMS } from "../../domain/tarifa/calcularTarifa.js";
 import { ZONAS } from "../../domain/tarifa/Zona.js";
 import { NOMBRE_USUARIO, ROLES } from "../../domain/usuario/Usuario.js";
-import { CANALES_SOLICITUD, RETENCION_MESES } from "../../domain/datos/DatosPersonales.js";
+import { CANALES_SOLICITUD } from "../../domain/datos/DatosPersonales.js";
 import {
   ALCANCES,
   CANALES,
@@ -342,10 +342,6 @@ export const filtroCierresSchema = z.object({
   usuarioId: z.uuid("usuario inválido").optional(),
   desde: z.string().optional(),
   hasta: z.string().optional(),
-});
-
-export const politicaDatosSchema = z.strictObject({
-  mesesRetencion: z.number().int().min(RETENCION_MESES.min).max(RETENCION_MESES.max),
 });
 
 export const titularSchema = z.object({ telefono: z.string().min(1, "obligatorio").max(40) });

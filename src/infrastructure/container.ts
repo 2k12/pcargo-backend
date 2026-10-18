@@ -38,11 +38,9 @@ import {
   ObtenerCierreCaja,
 } from "../application/use-cases/caja/Caja.js";
 import {
-  ActualizarPoliticaDatos,
   AtenderSolicitudDatos,
   ConsultarTitular,
   ListarSolicitudesDatos,
-  ObtenerPoliticaDatos,
 } from "../application/use-cases/datos/DatosPersonales.js";
 import {
   CrearEnvioPortal,
@@ -421,8 +419,6 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     obtenerCierreCaja: new ObtenerCierreCaja(a.caja),
 
     // ── Datos personales (v12/v13, ADMIN). Sin depuración automática: solo se anonimiza a pedido del titular.
-    obtenerPoliticaDatos: new ObtenerPoliticaDatos(depsDatos),
-    actualizarPoliticaDatos: new ActualizarPoliticaDatos(depsDatos),
     consultarTitular: new ConsultarTitular(depsDatos),
     atenderSolicitudDatos: invalidaTras(new AtenderSolicitudDatos(depsDatos), cache, trasAnonimizar),
     listarSolicitudesDatos: new ListarSolicitudesDatos(depsDatos),

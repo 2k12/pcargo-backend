@@ -1,14 +1,10 @@
 import type { DatosPersonalesRepository, Paginacion } from "../../../application/ports/repositories.js";
 import {
-  RETENCION_MESES,
   type CanalSolicitud,
-  type ConfiguracionDatos,
   type ResultadoSolicitud,
   type SolicitudDatos,
 } from "../../../domain/datos/DatosPersonales.js";
 import type { Db } from "./pool.js";
-
-const CLAVE_MESES = "datos_personales.meses_retencion";
 
 interface SolicitudRow {
   id: string;
@@ -36,27 +32,6 @@ const aSolicitud = (r: SolicitudRow): SolicitudDatos => ({
 
 export class PgDatosPersonalesRepository implements DatosPersonalesRepository {
   constructor(private readonly db: Db) {}
-
-  private async guardar(clave: string, valor: unknown): Promise<void> {
-    await this.db.query(
-      `INSERT INTO configuracion (clave, valor, actualizado_en) VALUES ($1, $2, now())
-       ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor, actualizado_en = now()`,
-      [clave, JSON.stringify(valor)],
-    );
-  }
-
-  async obtenerConfiguracion(): Promise<ConfiguracionDatos> {
-    // La fila "datos_personales.ultima_depuracion" (v12), si existe, ya no se lee (v13: sin depuración automática).
-    const { rows } = await this.db.query<{ valor: unknown }>("SELECT valor FROM configuracion WHERE clave = $1", [
-      CLAVE_MESES,
-    ]);
-    const meses = rows[0]?.valor;
-    return { mesesRetencion: typeof meses === "number" ? meses : RETENCION_MESES.defecto };
-  }
-
-  async guardarMesesRetencion(meses: number): Promise<void> {
-    await this.guardar(CLAVE_MESES, meses);
-  }
 
   async crearSolicitud(s: SolicitudDatos): Promise<void> {
     await this.db.query(
