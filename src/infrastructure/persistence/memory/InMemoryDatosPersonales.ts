@@ -1,29 +1,16 @@
 import type { DatosPersonalesRepository, Paginacion } from "../../../application/ports/repositories.js";
-import {
-  RETENCION_MESES,
-  type ConfiguracionDatos,
-  type SolicitudDatos,
-  type UltimaDepuracion,
-} from "../../../domain/datos/DatosPersonales.js";
+import { RETENCION_MESES, type ConfiguracionDatos, type SolicitudDatos } from "../../../domain/datos/DatosPersonales.js";
 
 export class InMemoryDatosPersonalesRepository implements DatosPersonalesRepository {
   private mesesRetencion: number = RETENCION_MESES.defecto;
-  private ultimaDepuracion: UltimaDepuracion | null = null;
   private readonly solicitudes: SolicitudDatos[] = [];
 
   async obtenerConfiguracion(): Promise<ConfiguracionDatos> {
-    return {
-      mesesRetencion: this.mesesRetencion,
-      ultimaDepuracion: this.ultimaDepuracion && structuredClone(this.ultimaDepuracion),
-    };
+    return { mesesRetencion: this.mesesRetencion };
   }
 
   async guardarMesesRetencion(meses: number): Promise<void> {
     this.mesesRetencion = meses;
-  }
-
-  async registrarDepuracion(depuracion: UltimaDepuracion): Promise<void> {
-    this.ultimaDepuracion = structuredClone(depuracion);
   }
 
   async crearSolicitud(solicitud: SolicitudDatos): Promise<void> {

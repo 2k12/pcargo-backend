@@ -5,12 +5,10 @@ import {
   type ConfiguracionDatos,
   type ResultadoSolicitud,
   type SolicitudDatos,
-  type UltimaDepuracion,
 } from "../../../domain/datos/DatosPersonales.js";
 import type { Db } from "./pool.js";
 
 const CLAVE_MESES = "datos_personales.meses_retencion";
-const CLAVE_DEPURACION = "datos_personales.ultima_depuracion";
 
 interface SolicitudRow {
   id: string;
@@ -48,25 +46,16 @@ export class PgDatosPersonalesRepository implements DatosPersonalesRepository {
   }
 
   async obtenerConfiguracion(): Promise<ConfiguracionDatos> {
-    const { rows } = await this.db.query<{ clave: string; valor: unknown }>(
-      "SELECT clave, valor FROM configuracion WHERE clave = ANY($1)",
-      [[CLAVE_MESES, CLAVE_DEPURACION]],
-    );
-    const valor = (clave: string) => rows.find((r) => r.clave === clave)?.valor;
-    const meses = valor(CLAVE_MESES);
-    const dep = valor(CLAVE_DEPURACION) as (Omit<UltimaDepuracion, "fecha"> & { fecha: string }) | undefined;
-    return {
-      mesesRetencion: typeof meses === "number" ? meses : RETENCION_MESES.defecto,
-      ultimaDepuracion: dep ? { ...dep, fecha: new Date(dep.fecha) } : null,
-    };
+    // La fila "datos_personales.ultima_depuracion" (v12), si existe, ya no se lee (v13: sin depuración automática).
+    const { rows } = await this.db.query<{ valor: unknown }>("SELECT valor FROM configuracion WHERE clave = $1", [
+      CLAVE_MESES,
+    ]);
+    const meses = rows[0]?.valor;
+    return { mesesRetencion: typeof meses === "number" ? meses : RETENCION_MESES.defecto };
   }
 
   async guardarMesesRetencion(meses: number): Promise<void> {
     await this.guardar(CLAVE_MESES, meses);
-  }
-
-  async registrarDepuracion(d: UltimaDepuracion): Promise<void> {
-    await this.guardar(CLAVE_DEPURACION, { ...d, fecha: d.fecha.toISOString() });
   }
 
   async crearSolicitud(s: SolicitudDatos): Promise<void> {

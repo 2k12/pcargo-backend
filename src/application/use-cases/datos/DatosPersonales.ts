@@ -1,16 +1,14 @@
 import type { Cliente } from "../../../domain/cliente/Cliente.js";
 import {
   digitosTitular,
-  fechaCorte,
   normalizarSolicitud,
   validarMesesRetencion,
   type DatosSolicitud,
   type SolicitudDatos,
 } from "../../../domain/datos/DatosPersonales.js";
 import type { Envio } from "../../../domain/envio/Envio.js";
-import { ESTADOS, ESTADOS_FINALES, esFinal } from "../../../domain/envio/EstadoEnvio.js";
+import { esFinal } from "../../../domain/envio/EstadoEnvio.js";
 import { exigirRol, type Actor } from "../../../domain/usuario/Usuario.js";
-import type { IntegracionRepository } from "../../ports/integraciones.js";
 import type {
   ClienteRepository,
   DatosPersonalesRepository,
@@ -22,13 +20,13 @@ import type { AlmacenArchivos, Clock, IdGenerator } from "../../ports/services.j
 import { POR_PAGINA_DEFECTO, POR_PAGINA_MAX, type PaginaDTO } from "../envios/ConsultasEnvio.js";
 import { eliminarSinFallar } from "../envios/EvidenciaEntrega.js";
 
-// Retención y eliminación de datos personales (LOPDP, contrato v12). Solo ADMIN (y la depuración diaria del servidor).
+// Datos personales (LOPDP, contrato v13). Solo ADMIN. El plazo de conservación es declarado (informativo): el sistema
+// nunca elimina ni anonimiza por su cuenta; solo lo hace al atender una solicitud del titular.
 
 export interface DepsDatos {
   envios: EnvioRepository;
   clientes: ClienteRepository;
   usuarios: UsuarioRepository;
-  integraciones: IntegracionRepository;
   datos: DatosPersonalesRepository;
   almacen: AlmacenArchivos;
   ids: IdGenerator;
@@ -37,16 +35,6 @@ export interface DepsDatos {
 
 export interface PoliticaDatosDTO {
   mesesRetencion: number;
-  ultimaDepuracion: { fecha: string; envios: number; clientes: number; evidencias: number } | null;
-  pendientes: { envios: number; clientes: number };
-}
-
-export interface ResultadoDepuracionDTO {
-  simulado: boolean;
-  envios: number;
-  clientes: number;
-  evidencias: number;
-  fechaCorte: string;
 }
 
 export interface DatosTitularDTO {
@@ -60,7 +48,6 @@ export interface SolicitudDatosDTO extends Omit<SolicitudDatos, "fecha"> {
 }
 
 const SOLO_ADMIN = ["ADMIN"] as const;
-const NO_FINALES = ESTADOS.filter((e) => !esFinal(e));
 
 const toSolicitudDTO = (s: SolicitudDatos): SolicitudDatosDTO => ({
   ...s,
@@ -82,45 +69,9 @@ async function anonimizarEnvios(d: DepsDatos, envios: Envio[], ahora: Date): Pro
   return { envios: envios.length, evidencias };
 }
 
-interface PlanDepuracion {
-  corte: Date;
-  envios: Envio[];
-  clientes: Cliente[];
-}
-
-/**
- * Qué tocaría la depuración: envíos terminados (por `actualizadoEn`) antes del corte y aún con datos, y clientes
- * inactivos (creados antes del corte, sin envíos en curso ni actualizados dentro del plazo, sin usuarios del portal
- * activos ni integraciones).
- */
-async function planificar(d: DepsDatos, ahora: Date, meses: number): Promise<PlanDepuracion> {
-  const corte = fechaCorte(ahora, meses);
-  const [envios, recientes, enCurso, clientes, accesos, integraciones] = await Promise.all([
-    d.envios.listar({ estados: [...ESTADOS_FINALES], actualizadoAntes: corte, anonimizado: false }),
-    d.envios.listar({ actualizadoDesde: corte }),
-    d.envios.listar({ estados: NO_FINALES }),
-    d.clientes.listar(),
-    d.usuarios.accesosPortalPorCliente(),
-    d.integraciones.listar(),
-  ]);
-  const activos = new Set<string>();
-  for (const e of [...recientes, ...enCurso]) if (e.clienteId) activos.add(e.clienteId);
-  for (const i of integraciones) if (i.clienteId) activos.add(i.clienteId);
-  const inactivos = clientes.filter(
-    (c) => c.creadoEn < corte && !activos.has(c.id) && (accesos.get(c.id) ?? 0) === 0,
-  );
-  return { corte, envios, clientes: inactivos };
-}
-
 async function politica(d: DepsDatos): Promise<PoliticaDatosDTO> {
-  const config = await d.datos.obtenerConfiguracion();
-  const plan = await planificar(d, d.clock.ahora(), config.mesesRetencion);
-  const u = config.ultimaDepuracion;
-  return {
-    mesesRetencion: config.mesesRetencion,
-    ultimaDepuracion: u && { fecha: u.fecha.toISOString(), envios: u.envios, clientes: u.clientes, evidencias: u.evidencias },
-    pendientes: { envios: plan.envios.length, clientes: plan.clientes.length },
-  };
+  const { mesesRetencion } = await d.datos.obtenerConfiguracion();
+  return { mesesRetencion };
 }
 
 export class ObtenerPoliticaDatos {
@@ -139,33 +90,6 @@ export class ActualizarPoliticaDatos {
     exigirRol(actor, SOLO_ADMIN);
     await this.d.datos.guardarMesesRetencion(validarMesesRetencion(mesesRetencion));
     return politica(this.d);
-  }
-}
-
-/** Depuración por plazo de conservación. `actor` null = la ejecución diaria del servidor. */
-export class DepurarDatos {
-  constructor(private readonly d: DepsDatos) {}
-
-  async ejecutar(actor: Actor | null, opciones: { simular?: boolean } = {}): Promise<ResultadoDepuracionDTO> {
-    if (actor) exigirRol(actor, SOLO_ADMIN);
-    const ahora = this.d.clock.ahora();
-    const { mesesRetencion } = await this.d.datos.obtenerConfiguracion();
-    const plan = await planificar(this.d, ahora, mesesRetencion);
-    const simulado = opciones.simular === true;
-    if (simulado) {
-      return {
-        simulado,
-        envios: plan.envios.length,
-        clientes: plan.clientes.length,
-        evidencias: plan.envios.filter((e) => e.evidencia).length,
-        fechaCorte: plan.corte.toISOString(),
-      };
-    }
-    const { envios, evidencias } = await anonimizarEnvios(this.d, plan.envios, ahora);
-    for (const c of plan.clientes) await this.d.clientes.eliminar(c.id);
-    const clientes = plan.clientes.length;
-    await this.d.datos.registrarDepuracion({ fecha: ahora, envios, clientes, evidencias });
-    return { simulado, envios, clientes, evidencias, fechaCorte: plan.corte.toISOString() };
   }
 }
 

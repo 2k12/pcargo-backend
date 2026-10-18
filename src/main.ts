@@ -1,7 +1,6 @@
 import { cargarConfig } from "./infrastructure/config/env.js";
 import { crearContenedor } from "./infrastructure/container.js";
 import { crearApp } from "./infrastructure/http/app.js";
-import { TareaPeriodica } from "./infrastructure/system/TareaPeriodica.js";
 import { Despachador } from "./infrastructure/webhooks/Despachador.js";
 
 const config = cargarConfig();
@@ -29,26 +28,11 @@ const despachador = config.WEBHOOKS_DESPACHADOR
   : null;
 despachador?.iniciar();
 
-// Retención de datos personales (LOPDP): anonimiza envíos y elimina clientes inactivos fuera de plazo.
-const depuracion = config.DATOS_DEPURACION_AUTOMATICA
-  ? new TareaPeriodica(
-      "Depuración de datos personales",
-      async () => {
-        const r = await casos.depurarDatos.ejecutar(null);
-        if (r.envios || r.clientes) {
-          console.log(`Depuración de datos personales: ${r.envios} envíos anonimizados, ${r.clientes} clientes eliminados`);
-        }
-      },
-      config.DATOS_DEPURACION_INTERVALO_HORAS * 3600,
-    )
-  : null;
-depuracion?.iniciar();
-
 for (const senal of ["SIGINT", "SIGTERM"] as const) {
   process.on(senal, () => {
     servidor.close(
       () =>
-        void Promise.all([despachador?.detener(), depuracion?.detener()])
+        void (despachador?.detener() ?? Promise.resolve())
           .then(cerrar)
           .then(() => process.exit(0)),
     );

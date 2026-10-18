@@ -1,7 +1,7 @@
 import { digitosTelefono } from "../cliente/Cliente.js";
 import { DomainError } from "../shared/DomainError.js";
 
-// Retención y eliminación de datos personales (LOPDP, contrato v12).
+// Retención declarada y eliminación de datos personales a pedido del titular (LOPDP, contratos v12/v13).
 
 export const RETENCION_MESES = { min: 12, max: 120, defecto: 12 } as const;
 
@@ -15,28 +15,9 @@ export function validarMesesRetencion(meses: number): number {
   return meses;
 }
 
-/** Instante antes del cual un envío terminado (por `actualizadoEn`) está fuera de plazo: `ahora − meses`. */
-export function fechaCorte(ahora: Date, meses: number): Date {
-  const corte = new Date(ahora);
-  const dia = corte.getUTCDate();
-  corte.setUTCDate(1);
-  corte.setUTCMonth(corte.getUTCMonth() - meses);
-  // 31 de marzo − 1 mes = 28/29 de febrero (no 3 de marzo).
-  const ultimoDia = new Date(Date.UTC(corte.getUTCFullYear(), corte.getUTCMonth() + 1, 0)).getUTCDate();
-  corte.setUTCDate(Math.min(dia, ultimoDia));
-  return corte;
-}
-
-export interface UltimaDepuracion {
-  fecha: Date;
-  envios: number;
-  clientes: number;
-  evidencias: number;
-}
-
+/** Plazo de conservación declarado (informativo): no dispara ninguna eliminación automática (v13). */
 export interface ConfiguracionDatos {
   mesesRetencion: number;
-  ultimaDepuracion: UltimaDepuracion | null;
 }
 
 export const CANALES_SOLICITUD = ["PRESENCIAL", "CORREO", "TELEFONO", "WHATSAPP"] as const;

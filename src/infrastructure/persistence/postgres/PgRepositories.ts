@@ -736,8 +736,6 @@ export class PgEnvioRepository implements EnvioRepository {
     else if (f.repartidorId) cond.push(`e.repartidor_id = $${params.push(f.repartidorId)}`);
     if (f.estados) cond.push(`e.estado::text = ANY($${params.push(f.estados)}::text[])`);
     if (f.actualizadoDesde) cond.push(`e.actualizado_en >= $${params.push(f.actualizadoDesde)}`);
-    if (f.actualizadoAntes) cond.push(`e.actualizado_en < $${params.push(f.actualizadoAntes)}`);
-    if (f.anonimizado !== undefined) cond.push(f.anonimizado ? "e.anonimizado_en IS NOT NULL" : "e.anonimizado_en IS NULL");
     if (f.telefono) {
       const i = params.push(f.telefono);
       cond.push(

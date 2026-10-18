@@ -48,10 +48,6 @@ const esquema = z.object({
   WEBHOOKS_DESPACHADOR: booleano(true),
   /** Cada cuántos segundos revisa la cola de webhooks. */
   WEBHOOKS_INTERVALO_SEG: z.coerce.number().int().min(1).max(3600).default(15),
-  /** Depuración automática de datos personales vencidos (LOPDP) en este proceso. */
-  DATOS_DEPURACION_AUTOMATICA: booleano(true),
-  /** Cada cuántas horas se ejecuta la depuración automática (por defecto, una vez al día). */
-  DATOS_DEPURACION_INTERVALO_HORAS: z.coerce.number().int().min(1).max(168).default(24),
 });
 
 type StorageDriver = "local" | "r2" | "memory";

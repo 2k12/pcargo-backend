@@ -348,8 +348,6 @@ export const politicaDatosSchema = z.strictObject({
   mesesRetencion: z.number().int().min(RETENCION_MESES.min).max(RETENCION_MESES.max),
 });
 
-export const depurarDatosSchema = z.strictObject({ simular: z.boolean().optional() });
-
 export const titularSchema = z.object({ telefono: z.string().min(1, "obligatorio").max(40) });
 
 export const solicitudDatosSchema = z.strictObject({

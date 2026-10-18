@@ -19,7 +19,7 @@ import {
   solicitudEnvio,
 } from "../../helpers/fakes.js";
 
-// Contrato v12 (casos de uso en memoria): retención y eliminación de datos personales, y portal de clientes empresa.
+// Contratos v12/v13 (casos de uso en memoria): plazo declarado y eliminación a pedido del titular, y portal de clientes empresa.
 
 let c: CasosDeUso;
 let a: Adaptadores;
@@ -43,83 +43,27 @@ const entregar = async (id: string, conFoto = false) => {
   if (conFoto) await c.subirEvidencia.ejecutar(OPERADOR, id, { foto: IMAGENES.jpeg, recibidoPor: "Rosa Vera" });
 };
 
-describe("Política de retención", () => {
-  it("12 meses por defecto, configurable entre 12 y 120, con lo pendiente de la próxima depuración", async () => {
-    expect(await c.obtenerPoliticaDatos.ejecutar(ADMIN)).toEqual({
-      mesesRetencion: 12,
-      ultimaDepuracion: null,
-      pendientes: { envios: 0, clientes: 0 },
-    });
-    const e = await crearEnvio();
-    await entregar(e.id);
-    clock.avanzar(13 * MES_MIN);
-    expect((await c.obtenerPoliticaDatos.ejecutar(ADMIN)).pendientes.envios).toBe(1);
-    expect(await c.actualizarPoliticaDatos.ejecutar(ADMIN, 24)).toMatchObject({ mesesRetencion: 24, pendientes: { envios: 0 } });
+describe("Política de retención (plazo declarado, v13)", () => {
+  it("12 meses por defecto, configurable entre 12 y 120; la respuesta es solo { mesesRetencion }", async () => {
+    expect(await c.obtenerPoliticaDatos.ejecutar(ADMIN)).toEqual({ mesesRetencion: 12 });
+    expect(await c.actualizarPoliticaDatos.ejecutar(ADMIN, 24)).toEqual({ mesesRetencion: 24 });
+    expect(await c.obtenerPoliticaDatos.ejecutar(ADMIN)).toEqual({ mesesRetencion: 24 });
     await expect(c.actualizarPoliticaDatos.ejecutar(ADMIN, 11)).rejects.toMatchObject({ code: "VALIDACION" });
     await expect(c.actualizarPoliticaDatos.ejecutar(ADMIN, 121)).rejects.toMatchObject({ code: "VALIDACION" });
     await expect(c.obtenerPoliticaDatos.ejecutar(OPERADOR)).rejects.toMatchObject({ code: "PROHIBIDO" });
   });
-});
 
-describe("Depuración", () => {
-  it("simula y luego anonimiza los envíos terminados fuera de plazo (con su foto y notas) y elimina clientes inactivos", async () => {
-    const viejo = await crearEnvio({ guardarCliente: true, consentimientoCliente: true });
-    await entregar(viejo.id, true);
-    const cancelado = await crearEnvio({ remitente: { nombre: "Luis", telefono: "0981112222" } });
-    await c.cambiarEstado.ejecutar(OPERADOR, cancelado.id, "CANCELADO", "Desistió");
-    const enCursoViejo = await crearEnvio({ remitente: { nombre: "Pedro", telefono: "0983334444" }, guardarCliente: true, consentimientoCliente: true });
-    const claveFoto = (await a.envios.buscarPorId(viejo.id))!.evidencia!.clave;
+  it("vencido el plazo, el sistema no anonimiza ni elimina nada por su cuenta (no hay caso de depuración)", async () => {
+    expect(c).not.toHaveProperty("depurarDatos");
+    const e = await crearEnvio({ guardarCliente: true, consentimientoCliente: true });
+    await entregar(e.id, true);
+    const claveFoto = (await a.envios.buscarPorId(e.id))!.evidencia!.clave;
+    clock.avanzar(13 * MES_MIN);
+    await c.obtenerPoliticaDatos.ejecutar(ADMIN);
+    await c.actualizarPoliticaDatos.ejecutar(ADMIN, 12);
+    expect(await c.obtenerEnvio.ejecutar(e.id)).toMatchObject({ remitente: { nombre: "María Pérez" }, anonimizadoEn: null });
     expect(await almacen.obtener(claveFoto)).not.toBeNull();
-
-    clock.avanzar(13 * MES_MIN);
-    const reciente = await crearEnvio({ remitente: { nombre: "Eva", telefono: "0985556666" } });
-    await entregar(reciente.id);
-
-    const simulado = await c.depurarDatos.ejecutar(ADMIN, { simular: true });
-    expect(simulado).toEqual({ simulado: true, envios: 2, clientes: 1, evidencias: 1, fechaCorte: "2026-11-22T15:00:00.000Z" });
-    expect((await c.obtenerEnvio.ejecutar(viejo.id)).anonimizadoEn).toBeNull();
-
-    const real = await c.depurarDatos.ejecutar(ADMIN);
-    expect(real).toMatchObject({ simulado: false, envios: 2, clientes: 1, evidencias: 1 });
-    const anon = await c.obtenerEnvio.ejecutar(viejo.id);
-    expect(anon).toMatchObject({
-      remitente: { nombre: "Anonimizado", telefono: "", direccion: null },
-      destinatario: { nombre: "Anonimizado", telefono: "", direccion: "Anonimizado" },
-      descripcion: null,
-      evidencia: null,
-      estado: "ENTREGADO",
-      costo: 3,
-      anonimizadoEn: clock.ahora().toISOString(),
-    });
-    expect(anon.historial!.every((h) => h.nota === null)).toBe(true);
-    expect(await almacen.obtener(claveFoto)).toBeNull();
-    // el seguimiento público tampoco muestra ya las notas
-    expect((await c.seguimiento.ejecutar(String(viejo.numeroGuia))).historial.every((h) => h.nota === null)).toBe(true);
-    // el cliente de «María» (solo envíos viejos terminados) se eliminó; el de Pedro (envío en curso) y Textiles
-    // (usuario del portal activo) se conservan; los envíos en curso y recientes no se tocan
-    expect((await c.listarClientes.ejecutar()).map((x) => x.nombre)).toEqual(["Pedro", "Textiles Atuntaqui"]);
-    expect((await c.obtenerEnvio.ejecutar(enCursoViejo.id)).anonimizadoEn).toBeNull();
-    expect((await c.obtenerEnvio.ejecutar(reciente.id)).remitente.nombre).toBe("Eva");
-
-    expect(await c.obtenerPoliticaDatos.ejecutar(ADMIN)).toMatchObject({
-      ultimaDepuracion: { fecha: clock.ahora().toISOString(), envios: 2, clientes: 1, evidencias: 1 },
-      pendientes: { envios: 0, clientes: 0 },
-    });
-    // la ejecución diaria (sin actor) es idempotente
-    expect(await c.depurarDatos.ejecutar(null)).toMatchObject({ envios: 0, clientes: 0 });
-  });
-
-  it("no elimina clientes con integraciones ni creados dentro del plazo", async () => {
-    const cliente = await c.crearCliente.ejecutar({ nombre: "Tienda Andina", telefono: "062600100", consentimiento: true });
-    await c.crearIntegracion.ejecutar(ADMIN, {
-      nombre: "Tienda Andina",
-      remitente: { nombre: "Tienda Andina", telefono: "062600100", direccion: "Centro" },
-      ciudadOrigenId: 1,
-      clienteId: cliente.id,
-    });
-    clock.avanzar(13 * MES_MIN);
-    await c.crearCliente.ejecutar({ nombre: "Nuevo", telefono: "062600200", consentimiento: true });
-    expect(await c.depurarDatos.ejecutar(ADMIN, { simular: true })).toMatchObject({ clientes: 0 });
+    expect((await c.listarClientes.ejecutar({ q: "María" })).length).toBe(1);
   });
 });
 
@@ -127,6 +71,7 @@ describe("Solicitudes del titular", () => {
   it("consulta por dígitos del teléfono (remitente, destinatario o cliente) y atiende la eliminación", async () => {
     const terminado = await crearEnvio({ guardarCliente: true, consentimientoCliente: true });
     await entregar(terminado.id, true);
+    const claveFoto = (await a.envios.buscarPorId(terminado.id))!.evidencia!.clave;
     const comoDestinatario = await crearEnvio({
       remitente: { nombre: "Luis", telefono: "0981112222" },
       destinatario: { nombre: "María Pérez", telefono: "099 123 4567", direccion: "Quito" },
@@ -160,6 +105,19 @@ describe("Solicitudes del titular", () => {
     });
     expect(JSON.stringify(solicitud)).not.toContain("0991234567");
     expect((await c.obtenerEnvio.ejecutar(comoDestinatario.id)).destinatario.nombre).toBe("Anonimizado");
+    const anon = await c.obtenerEnvio.ejecutar(terminado.id);
+    expect(anon).toMatchObject({
+      remitente: { nombre: "Anonimizado", telefono: "", direccion: null },
+      destinatario: { nombre: "Anonimizado", telefono: "", direccion: "Anonimizado" },
+      descripcion: null,
+      evidencia: null,
+      estado: "ENTREGADO",
+      anonimizadoEn: clock.ahora().toISOString(),
+    });
+    expect(anon.historial!.every((h) => h.nota === null)).toBe(true);
+    expect(await almacen.obtener(claveFoto)).toBeNull();
+    // el seguimiento público tampoco muestra ya las notas
+    expect((await c.seguimiento.ejecutar(String(terminado.numeroGuia))).historial.every((h) => h.nota === null)).toBe(true);
     expect((await c.obtenerEnvio.ejecutar(enCurso.id)).remitente.nombre).toBe("María Pérez");
     expect(await c.listarClientes.ejecutar({ q: "María" })).toEqual([]);
     await expect(c.login.ejecutar("maria@correo.ec", "x")).rejects.toMatchObject({ code: "CREDENCIALES_INVALIDAS" });

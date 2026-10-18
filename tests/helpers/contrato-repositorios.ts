@@ -920,10 +920,8 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(await guias({ repartidorId: null })).toEqual([e3!.numeroGuia]);
       expect(await guias({ estados: ["REGISTRADO", "CANCELADO"] })).toEqual([e2!.numeroGuia, e3!.numeroGuia]);
       expect(await guias({ actualizadoDesde: fecha(10) })).toEqual([e1!.numeroGuia, e3!.numeroGuia]);
-      expect(await guias({ actualizadoAntes: fecha(10) })).toEqual([e2!.numeroGuia]);
       expect(await guias({ telefono: "0987654321" })).toEqual([e1!.numeroGuia, e2!.numeroGuia, e3!.numeroGuia]);
       expect(await guias({ telefono: "0980000000" })).toEqual([]);
-      expect(await guias({ anonimizado: true })).toEqual([]);
       const pagina = await repos.envios.listarPagina({ repartidorId: REP.id, estados: ["EN_TRANSITO"] }, { pagina: 1, porPagina: 10 });
       expect([pagina.total, pagina.envios[0]?.id]).toEqual([1, e1!.id]);
       // quitar la asignación
@@ -953,7 +951,6 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
         ["REGISTRADO", null],
         ["CANCELADO", null],
       ]);
-      expect((await repos.envios.listar({ anonimizado: true })).map((x) => x.id)).toEqual([e.id]);
       // una copia vieja (sin anonimizar) no restaura los datos
       await repos.envios.guardar(copia);
       expect((await repos.envios.buscarPorId(e.id))!.toSnapshot()).toMatchObject({ remitente: { nombre: "Anonimizado" }, anonimizadoEn: fecha(100) });
@@ -1035,14 +1032,10 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(await repos.caja.buscarCierre("00000000-0000-4000-c400-0000000000ff")).toBeNull();
     });
 
-    it("datos personales: configuración por defecto, plazo, última depuración y solicitudes paginadas", async () => {
-      expect(await repos.datosPersonales.obtenerConfiguracion()).toEqual({ mesesRetencion: 12, ultimaDepuracion: null });
+    it("datos personales: configuración por defecto, plazo declarado y solicitudes paginadas", async () => {
+      expect(await repos.datosPersonales.obtenerConfiguracion()).toEqual({ mesesRetencion: 12 });
       await repos.datosPersonales.guardarMesesRetencion(36);
-      await repos.datosPersonales.registrarDepuracion({ fecha: fecha(5), envios: 3, clientes: 1, evidencias: 2 });
-      expect(await repos.datosPersonales.obtenerConfiguracion()).toEqual({
-        mesesRetencion: 36,
-        ultimaDepuracion: { fecha: fecha(5), envios: 3, clientes: 1, evidencias: 2 },
-      });
+      expect(await repos.datosPersonales.obtenerConfiguracion()).toEqual({ mesesRetencion: 36 });
       const solicitud = (n: number, min: number) => ({
         id: `00000000-0000-4000-c500-${String(n).padStart(12, "0")}`,
         tipo: "ELIMINACION" as const,

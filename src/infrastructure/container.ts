@@ -41,7 +41,6 @@ import {
   ActualizarPoliticaDatos,
   AtenderSolicitudDatos,
   ConsultarTitular,
-  DepurarDatos,
   ListarSolicitudesDatos,
   ObtenerPoliticaDatos,
 } from "../application/use-cases/datos/DatosPersonales.js";
@@ -224,7 +223,7 @@ export interface Adaptadores {
   // ── v12 ──
   /** Cobros y cierres de caja. */
   caja: CajaRepository;
-  /** Política de retención, depuraciones y solicitudes del titular (LOPDP). */
+  /** Plazo de conservación declarado y solicitudes del titular (LOPDP). */
   datosPersonales: DatosPersonalesRepository;
   contrasenas: GeneradorContrasenas;
 }
@@ -288,7 +287,6 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     envios: a.envios,
     clientes: a.clientes,
     usuarios: a.usuarios,
-    integraciones: a.integraciones,
     datos: a.datosPersonales,
     almacen: a.almacen,
     ids: a.ids,
@@ -422,10 +420,9 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     listarCierresCaja: new ListarCierresCaja(a.caja),
     obtenerCierreCaja: new ObtenerCierreCaja(a.caja),
 
-    // ── Datos personales (v12, ADMIN). La depuración diaria de main.ts usa depurarDatos con actor null.
+    // ── Datos personales (v12/v13, ADMIN). Sin depuración automática: solo se anonimiza a pedido del titular.
     obtenerPoliticaDatos: new ObtenerPoliticaDatos(depsDatos),
     actualizarPoliticaDatos: new ActualizarPoliticaDatos(depsDatos),
-    depurarDatos: invalidaTras(new DepurarDatos(depsDatos), cache, trasAnonimizar),
     consultarTitular: new ConsultarTitular(depsDatos),
     atenderSolicitudDatos: invalidaTras(new AtenderSolicitudDatos(depsDatos), cache, trasAnonimizar),
     listarSolicitudesDatos: new ListarSolicitudesDatos(depsDatos),

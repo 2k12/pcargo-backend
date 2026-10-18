@@ -284,22 +284,17 @@ describe("Caja (v12)", () => {
   });
 });
 
-describe("Datos personales (v12)", () => {
-  it("política, depuración simulada, consulta del titular y solicitudes de eliminación", async () => {
+describe("Datos personales (v12/v13)", () => {
+  it("política declarada, consulta del titular y solicitudes de eliminación", async () => {
     expect((await request(app).get("/api/datos-personales/politica").set(auth(tokenAdmin)).expect(200)).body).toEqual({
       mesesRetencion: 12,
-      ultimaDepuracion: null,
-      pendientes: { envios: 0, clientes: 0 },
     });
     await request(app).put("/api/datos-personales/politica").set(auth(tokenAdmin)).send({ mesesRetencion: 11 }).expect(400);
     await request(app).put("/api/datos-personales/politica").set(auth(tokenAdmin)).send({ mesesRetencion: 121 }).expect(400);
-    expect((await request(app).put("/api/datos-personales/politica").set(auth(tokenAdmin)).send({ mesesRetencion: 24 }).expect(200)).body.mesesRetencion).toBe(24);
-    const sim = await request(app).post("/api/datos-personales/depurar").set(auth(tokenAdmin)).send({ simular: true }).expect(200);
-    expect(sim.body).toMatchObject({ simulado: true, envios: 0, clientes: 0, evidencias: 0, fechaCorte: expect.any(String) });
-    await request(app).post("/api/datos-personales/depurar").set(auth(tokenAdmin)).send({ simular: "si" }).expect(400);
-    const real = await request(app).post("/api/datos-personales/depurar").set(auth(tokenAdmin)).send({}).expect(200);
-    expect(real.body.simulado).toBe(false);
-    expect((await request(app).get("/api/datos-personales/politica").set(auth(tokenAdmin))).body.ultimaDepuracion).toMatchObject({ envios: 0 });
+    expect((await request(app).put("/api/datos-personales/politica").set(auth(tokenAdmin)).send({ mesesRetencion: 24 }).expect(200)).body).toEqual({
+      mesesRetencion: 24,
+    });
+    expect((await request(app).get("/api/datos-personales/politica").set(auth(tokenAdmin)).expect(200)).body).toEqual({ mesesRetencion: 24 });
 
     const e = await crearEnvio();
     await estado(e.id, "EN_TRANSITO", "Sale en el bus");
@@ -335,6 +330,13 @@ describe("Datos personales (v12)", () => {
     await request(app).get(`/api/envios/${e.id}/evidencia`).set(auth(tokenOperador)).expect(404);
     const pagina = await request(app).get("/api/datos-personales/solicitudes?porPagina=1").set(auth(tokenAdmin)).expect(200);
     expect(pagina.body).toMatchObject({ total: 1, porPagina: 1, totalPaginas: 1, datos: [{ id: sol.body.id }] });
+  });
+
+  it("v13: la depuración automática ya no existe (POST /datos-personales/depurar → 404)", async () => {
+    for (const body of [{}, { simular: true }]) {
+      const r = await request(app).post("/api/datos-personales/depurar").set(auth(tokenAdmin)).send(body).expect(404);
+      expect(r.body).toEqual({ error: { code: "NO_ENCONTRADO", message: "Recurso no encontrado" } });
+    }
   });
 });
 
