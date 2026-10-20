@@ -24,6 +24,8 @@ export interface SolicitudEnvio {
   descripcion?: string | null;
   /** Número de la guía física. Vacío → consecutivo automático. */
   numeroGuia?: string | number | null;
+  /** v15: recargo en USD sumado al costo (solo panel; la API de empresas y el portal no lo envían). */
+  costoAdicional?: number;
   /** Cliente frecuente que envía. */
   clienteId?: string | null;
   /** Sin `clienteId`: guarda al remitente como cliente frecuente (o reutiliza el que tenga su teléfono). */
@@ -88,6 +90,7 @@ export class CrearEnvio {
       zona: cotizacion.zona,
       formaPago: s.formaPago,
       descripcion: s.descripcion,
+      costoAdicional: s.costoAdicional,
       integracion: o.integracion ?? null,
       referenciaExterna: o.referenciaExterna ?? null,
     };

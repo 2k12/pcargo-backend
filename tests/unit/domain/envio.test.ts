@@ -39,6 +39,42 @@ describe("Envio", () => {
     expect(Envio.reconstruir(rural.toSnapshot()).zona).toBe("RURAL");
   });
 
+  describe("costo adicional (v15)", () => {
+    it.each([
+      [2, 159.5],
+      [1.5, 159],
+      [1.1, 158.6],
+      [0.29, 157.79],
+      [9999.99, 10157.49],
+    ])("%s se suma al costo de los ítems y se guarda aparte", (costoAdicional, costo) => {
+      const e = crear({ costoAdicional });
+      expect(e.costo).toBe(costo);
+      expect(e.costoAdicional).toBe(costoAdicional);
+      expect(e.toSnapshot()).toMatchObject({ costo, costoAdicional });
+    });
+
+    it("0 o ausente → 0 y el costo es solo la suma de los subtotales", () => {
+      expect(crear({ costoAdicional: 0 }).toSnapshot()).toMatchObject({ costo: 157.5, costoAdicional: 0 });
+      expect(crear().toSnapshot()).toMatchObject({ costo: 157.5, costoAdicional: 0 });
+    });
+
+    it.each([[-1], [-0.01], [1.234], [0.001], [10000], [9999.991], [Number.NaN], [Number.POSITIVE_INFINITY]])(
+      "%s → VALIDACION",
+      (costoAdicional) => {
+        expect(() => crear({ costoAdicional })).toThrow(expect.objectContaining({ code: "VALIDACION" }));
+      },
+    );
+
+    it("reconstruir usa 0 si falta (envíos anteriores a v15) y conserva el valor guardado", () => {
+      const { costoAdicional: _omitido, ...viejo } = crear().toSnapshot();
+      expect(Envio.reconstruir(viejo).costoAdicional).toBe(0);
+      expect(Envio.reconstruir(crear({ costoAdicional: 2.25 }).toSnapshot()).toSnapshot()).toMatchObject({
+        costo: 159.75,
+        costoAdicional: 2.25,
+      });
+    });
+  });
+
   it.each([
     [{ remitente: { nombre: "", telefono: "0991234567" } }, /nombre del remitente/],
     [{ remitente: { nombre: "Ana", telefono: "abc" } }, /teléfono del remitente/],

@@ -41,7 +41,10 @@ export interface EnvioDTO {
   pesoTotalKg: number;
   zona: string;
   descripcion: string | null;
+  /** Incluye `costoAdicional`. */
   costo: number;
+  /** v15: recargo sumado al costo (0 si no hubo). */
+  costoAdicional: number;
   formaPago: string;
   estado: string;
   registro: GestionDTO;
@@ -90,6 +93,7 @@ export function toEnvioDTO(envio: Envio, ruta: Ruta | undefined, conHistorial = 
     zona: s.zona,
     descripcion: s.descripcion,
     costo: s.costo,
+    costoAdicional: s.costoAdicional,
     formaPago: s.formaPago,
     estado: s.estado,
     registro: { fecha: envio.registro.fecha.toISOString(), operador: envio.registro.operador },

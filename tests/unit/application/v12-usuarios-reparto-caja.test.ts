@@ -245,6 +245,12 @@ describe("Caja", () => {
     ]);
   });
 
+  it("v15: el cobro ORIGEN de un PAGADO incluye el costo adicional (tarifa + 1.5)", async () => {
+    const envio = await crearEnvio({ costoAdicional: 1.5 });
+    expect(envio).toMatchObject({ costo: 4.5, costoAdicional: 1.5 });
+    expect(await a.caja.pendientes()).toEqual([expect.objectContaining({ tipo: "ORIGEN", monto: 4.5, envioId: envio.id })]);
+  });
+
   it("pendientes por persona, cierre con diferencia y nota, y un cobro nunca en dos cierres", async () => {
     await crearEnvio();
     await crearEnvio({ items: [{ tipoCarga: "PLUMON_GRANDE", cantidad: 2, pesoKg: 3 }] });

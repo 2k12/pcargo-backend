@@ -83,6 +83,8 @@ export const crearEnvioSchema = cotizacionSchema.extend({
   descripcion: z.string().max(500).nullish(),
   // guía física: texto (admite ceros a la izquierda) o número; el dominio valida el formato
   numeroGuia: z.union([z.string().max(40), z.number()]).nullish(),
+  // v15: recargo en USD; el dominio valida ≥ 0, ≤ 9999.99 y hasta 2 decimales (400 VALIDACION)
+  costoAdicional: z.number().optional(),
   clienteId: z.uuid("cliente inválido").nullish(),
   guardarCliente: z.boolean().optional(),
   // el caso de uso exige `true` junto con guardarCliente (422); sin guardarCliente se ignora

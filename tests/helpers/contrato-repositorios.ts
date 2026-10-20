@@ -305,6 +305,20 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(await repos.tiposCarga.buscarPorCodigo("CARTON")).toMatchObject({ precio: 3, precioRural: null, mayoreo: null, pesoMaxKg: 35 });
     });
 
+    it("guarda el costo adicional (v15) sumado al costo; 0 si no se indicó", async () => {
+      const con = nuevoEnvio(1, { costoAdicional: 2.25 });
+      const sin = nuevoEnvio(2);
+      await repos.envios.guardar(con);
+      await repos.envios.guardar(sin);
+      expect((await repos.envios.buscarPorId(con.id))?.toSnapshot()).toMatchObject({ costo: 69.45, costoAdicional: 2.25 });
+      expect((await repos.envios.buscarPorId(sin.id))?.toSnapshot()).toMatchObject({ costo: 67.2, costoAdicional: 0 });
+      // se conserva tras un cambio de estado (upsert)
+      const leido = (await repos.envios.buscarPorId(con.id))!;
+      leido.cambiarEstado("EN_TRANSITO", { ahora: new Date(Date.UTC(2026, 9, 1, 13)), actor: OPERADOR });
+      await repos.envios.guardar(leido);
+      expect((await repos.envios.buscarPorNumeroGuia(con.numeroGuia))?.costoAdicional).toBe(2.25);
+    });
+
     it("guarda la dirección opcional del remitente (null si no se indicó)", async () => {
       const con = nuevoEnvio(1, { remitente: { nombre: "María Pérez", telefono: "0991234567", direccion: "Sucre 4-56, Ibarra" } });
       const sin = nuevoEnvio(2);

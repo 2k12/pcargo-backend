@@ -71,7 +71,10 @@ export interface EnvioProps {
   zona: Zona;
   formaPago: FormaPago;
   descripcion: string | null;
+  /** Suma de los subtotales más `costoAdicional` (USD). */
   costo: number;
+  /** Recargo acordado al crear el envío desde el panel (v15); 0 si no hubo. Ya está incluido en `costo`. */
+  costoAdicional: number;
   estado: EstadoEnvio;
   creadoPor: string | null;
   creadoEn: Date;
@@ -109,6 +112,29 @@ export interface NuevoEnvio {
   /** Envío ingresado por la API de una empresa: exige `referenciaExterna`. */
   integracion?: { id: string; nombre: string } | null;
   referenciaExterna?: string | null;
+  /** Recargo en USD (≥ 0, hasta 2 decimales, ≤ 9999.99) que se suma al costo. Por defecto 0. */
+  costoAdicional?: number;
+}
+
+export const MAX_COSTO_ADICIONAL = 9999.99;
+
+/**
+ * Valida el costo adicional: número finito, ≥ 0, ≤ 9999.99 y con hasta 2 decimales (tolerando la imprecisión de coma
+ * flotante: 1.1 o 0.29 son válidos). Ausente → 0.
+ */
+export function validarCostoAdicional(valor: number | null | undefined): number {
+  if (valor === undefined || valor === null) return 0;
+  if (typeof valor !== "number" || !Number.isFinite(valor) || valor < 0) {
+    throw new DomainError("VALIDACION", "El costo adicional debe ser un monto mayor o igual a 0");
+  }
+  if (valor > MAX_COSTO_ADICIONAL) {
+    throw new DomainError("VALIDACION", `El costo adicional no puede superar ${MAX_COSTO_ADICIONAL}`);
+  }
+  const centavos = valor * 100;
+  if (Math.abs(centavos - Math.round(centavos)) > 1e-6) {
+    throw new DomainError("VALIDACION", "El costo adicional admite hasta 2 decimales");
+  }
+  return Math.round(centavos) / 100;
 }
 
 const TELEFONO = /^\+?[0-9 ]{7,15}$/;
@@ -147,6 +173,7 @@ export class Envio {
     if (!integracion && datos.referenciaExterna) {
       throw new DomainError("VALIDACION", "La referencia externa solo aplica a envíos ingresados por API");
     }
+    const costoAdicional = validarCostoAdicional(datos.costoAdicional);
     const usuario = ctx.actor ? { id: ctx.actor.id, nombre: ctx.actor.nombre } : null;
     return new Envio({
       id: ctx.id,
@@ -167,7 +194,8 @@ export class Envio {
       zona: datos.zona ?? ZONA_POR_DEFECTO,
       formaPago: datos.formaPago,
       descripcion: datos.descripcion?.trim() || null,
-      costo: redondear2(datos.items.reduce((s, i) => s + i.subtotal, 0)),
+      costo: redondear2(datos.items.reduce((s, i) => s + i.subtotal, 0) + costoAdicional),
+      costoAdicional,
       estado: "REGISTRADO",
       creadoPor: ctx.actor?.id ?? null,
       creadoEn: ctx.ahora,
@@ -183,9 +211,11 @@ export class Envio {
     });
   }
 
-  static reconstruir(props: EnvioProps): Envio {
+  /** `costoAdicional` ausente (envíos anteriores a v15) → 0. */
+  static reconstruir(props: Omit<EnvioProps, "costoAdicional"> & { costoAdicional?: number | null }): Envio {
     return new Envio({
       ...props,
+      costoAdicional: props.costoAdicional ?? 0,
       remitente: { ...props.remitente, direccion: props.remitente.direccion ?? null },
       items: [...props.items],
       historial: [...props.historial],
@@ -313,6 +343,10 @@ export class Envio {
 
   get costo(): number {
     return this.props.costo;
+  }
+
+  get costoAdicional(): number {
+    return this.props.costoAdicional;
   }
 
   get actualizadoEn(): Date {
