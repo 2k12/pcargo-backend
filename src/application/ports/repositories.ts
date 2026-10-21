@@ -153,6 +153,11 @@ export interface FiltroEnvios {
   actualizadoDesde?: Date;
   /** Dígitos del teléfono del remitente o del destinatario (comparando solo dígitos). */
   telefono?: string;
+  // ── v16 ──
+  /** `creadoEn` ≥ este instante. */
+  registradoDesde?: Date;
+  /** `creadoEn` < este instante (exclusivo). */
+  registradoHasta?: Date;
 }
 
 export interface Paginacion {

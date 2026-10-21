@@ -145,6 +145,22 @@ describe("Estados, consultas y seguimiento", () => {
     expect((await c.listarEnvios.ejecutar({ q: `00${a.numeroGuia}` })).datos.map((e) => e.id)).toEqual([a.id]);
   });
 
+  it("filtra por fecha de registro en hora de Ecuador, inclusive (v16)", async () => {
+    const a = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio()); // 2026-10-01 07:00 EC
+    clock.avanzar(990);
+    const b = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio()); // 2026-10-01 23:30 EC (2026-10-02 04:30 UTC)
+    clock.avanzar(30);
+    const d = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio()); // 2026-10-02 00:00 EC
+    const ids = async (f: { desde?: string; hasta?: string }) => (await c.listarEnvios.ejecutar(f)).datos.map((e) => e.id);
+
+    expect(await ids({ desde: "2026-10-01", hasta: "2026-10-01" })).toEqual([b.id, a.id]);
+    expect(await ids({ desde: "2026-10-02" })).toEqual([d.id]);
+    expect(await ids({ hasta: "2026-10-01" })).toEqual([b.id, a.id]);
+    expect(await ids({ hasta: "2026-09-30" })).toEqual([]);
+    await expect(c.listarEnvios.ejecutar({ desde: "01-10-2026" })).rejects.toMatchObject({ code: "VALIDACION" });
+    await expect(c.listarEnvios.ejecutar({ desde: "2026-10-02", hasta: "2026-10-01" })).rejects.toMatchObject({ code: "VALIDACION" });
+  });
+
   it("pagina el listado en el servidor y acota el tamaño de página", async () => {
     const ids: string[] = [];
     for (let i = 0; i < 5; i++) {

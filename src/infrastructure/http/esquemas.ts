@@ -109,6 +109,9 @@ export const filtroEnviosSchema = z.object({
     .optional()
     .transform((v) => (v === "ninguno" ? null : v)),
   q: z.string().optional(),
+  // v16: fechas AAAA-MM-DD de Ecuador (inclusive) sobre la fecha de registro; el caso de uso valida (422)
+  desde: z.string().optional(),
+  hasta: z.string().optional(),
 });
 
 export const paginacionSchema = z.object({

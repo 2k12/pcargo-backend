@@ -163,6 +163,23 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect((await repos.envios.listar({ rutaId: 11 })).map((e) => e.id)).toEqual(expect.arrayContaining([a.id, b.id]));
     });
 
+    it("filtra por fecha de registro (v16): desde inclusivo, hasta exclusivo", async () => {
+      const [a, b, d] = [nuevoEnvio(0), nuevoEnvio(10), nuevoEnvio(20)]; // 12:00, 12:10 y 12:20 UTC
+      for (const e of [a, b, d]) await repos.envios.guardar(e);
+      const t = (min: number) => new Date(Date.UTC(2026, 9, 1, 12, min));
+      const ids = async (f: Parameters<typeof repos.envios.listar>[0]) =>
+        (await repos.envios.listar(f)).map((e) => e.id).filter((id) => [a.id, b.id, d.id].includes(id));
+      expect(await ids({ registradoDesde: t(10) })).toEqual([d.id, b.id]);
+      expect(await ids({ registradoHasta: t(10) })).toEqual([a.id]);
+      expect(await ids({ registradoDesde: t(5), registradoHasta: t(20) })).toEqual([b.id]);
+      const p = await repos.envios.listarPagina(
+        { registradoDesde: t(0), registradoHasta: t(21), q: a.toSnapshot().remitente.nombre },
+        { pagina: 1, porPagina: 2 },
+      );
+      expect(p.envios.map((e) => e.id)).toEqual([d.id, b.id]);
+      expect(p.total).toBeGreaterThanOrEqual(3);
+    });
+
     it("pagina con orden estable y total del filtro", async () => {
       // Tres envíos con la MISMA fecha: el desempate por id evita repetir o saltar filas entre páginas.
       const iguales = [nuevoEnvio(50), nuevoEnvio(50), nuevoEnvio(50)];
