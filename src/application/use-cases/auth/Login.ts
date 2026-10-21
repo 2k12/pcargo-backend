@@ -8,6 +8,15 @@ export interface LoginResultado {
   usuario: Usuario;
 }
 
+/** Token y usuario de una sesión nueva (login con correo o con código único). */
+export function iniciarSesion(tokens: TokenService, usuario: Usuario): LoginResultado {
+  const { id, nombre, rol } = usuario;
+  return {
+    token: tokens.firmar({ id, nombre, rol }),
+    usuario: { id, nombre, email: usuario.email, rol, clienteId: usuario.clienteId ?? null },
+  };
+}
+
 export class Login {
   constructor(
     private readonly usuarios: UsuarioRepository,
@@ -22,10 +31,6 @@ export class Login {
     if (!usuario || !valido) {
       throw new DomainError("CREDENCIALES_INVALIDAS", "Correo o contraseña incorrectos");
     }
-    const { id, nombre, rol } = usuario;
-    return {
-      token: this.tokens.firmar({ id, nombre, rol }),
-      usuario: { id, nombre, email: usuario.email, rol, clienteId: usuario.clienteId ?? null },
-    };
+    return iniciarSesion(this.tokens, usuario);
   }
 }

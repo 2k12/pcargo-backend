@@ -135,6 +135,37 @@ export class PgUsuarioRepository implements UsuarioRepository {
     );
     return new Map(rows.map((r) => [r.id, r.n]));
   }
+
+  async buscarPorCodigoAcceso(huella: string): Promise<UsuarioConCredenciales | null> {
+    const { rows } = await this.db.query(
+      `SELECT ${COLUMNAS_USUARIO}, password_hash AS "passwordHash", activo FROM usuarios WHERE codigo_acceso_hash = $1`,
+      [huella],
+    );
+    return rows[0] ?? null;
+  }
+
+  async codigoAccesoActivoDesde(id: string): Promise<Date | null> {
+    const { rows } = await this.db.query<{ en: Date | null }>(
+      "SELECT codigo_acceso_en AS en FROM usuarios WHERE id = $1",
+      [id],
+    );
+    return rows[0]?.en ?? null;
+  }
+
+  async guardarCodigoAcceso(id: string, huella: string, en: Date): Promise<void> {
+    await this.db
+      .query("UPDATE usuarios SET codigo_acceso_hash = $2, codigo_acceso_en = $3 WHERE id = $1", [id, huella, en])
+      .catch((e: unknown) => {
+        if ((e as { code?: string }).code === "23505") {
+          throw new DomainError("CONFLICTO", "Ese código no está disponible, elige otro");
+        }
+        throw e;
+      });
+  }
+
+  async quitarCodigoAcceso(id: string): Promise<void> {
+    await this.db.query("UPDATE usuarios SET codigo_acceso_hash = NULL, codigo_acceso_en = NULL WHERE id = $1", [id]);
+  }
 }
 
 export class PgCiudadRepository implements CiudadRepository {

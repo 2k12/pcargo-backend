@@ -3,8 +3,10 @@ import type { LimitadorTasa } from "../../application/ports/cache.js";
 import type { CasosDeUso } from "../container.js";
 import {
   actualizarCiudadSchema,
+  activarCodigoAccesoSchema,
   actualizarPerfilSchema,
   cambiarContrasenaSchema,
+  loginCodigoSchema,
   evidenciaSchema,
   actualizarClienteSchema,
   actualizarRutaSchema,
@@ -74,6 +76,10 @@ export function crearRouter(c: CasosDeUso, opciones: OpcionesRouter = {}): Route
     res.json(await c.login.ejecutar(email, password));
   });
 
+  publico.post("/auth/login/codigo", async (req, res) => {
+    res.json(await c.loginConCodigo.ejecutar(loginCodigoSchema.parse(req.body).codigo));
+  });
+
   publico.get("/seguimiento/:numeroGuia", async (req, res) => {
     res.json(await c.seguimiento.ejecutar(req.params.numeroGuia));
   });
@@ -108,6 +114,20 @@ export function crearRouter(c: CasosDeUso, opciones: OpcionesRouter = {}): Route
     : [];
   privado.put("/auth/me/password", ...limiteContrasena, async (req, res) => {
     await c.cambiarContrasena.ejecutar(actorDe(res), cambiarContrasenaSchema.parse(req.body));
+    res.status(204).end();
+  });
+
+  // Código único de acceso (v17). Activarlo exige la contraseña: comparte el límite del cambio de contraseña.
+  privado.get("/auth/me/codigo", async (_req, res) => {
+    res.json(await c.codigoAcceso.ejecutar(actorDe(res)));
+  });
+
+  privado.put("/auth/me/codigo", ...limiteContrasena, async (req, res) => {
+    res.json(await c.activarCodigoAcceso.ejecutar(actorDe(res), activarCodigoAccesoSchema.parse(req.body)));
+  });
+
+  privado.delete("/auth/me/codigo", async (_req, res) => {
+    await c.desactivarCodigoAcceso.ejecutar(actorDe(res));
     res.status(204).end();
   });
 

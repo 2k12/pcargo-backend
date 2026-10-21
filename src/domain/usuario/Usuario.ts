@@ -111,6 +111,26 @@ export function validarContrasenaNueva(actual: string, nueva: string): void {
   if (nueva === actual) throw new DomainError("VALIDACION", "La contraseña nueva debe ser distinta de la actual");
 }
 
+// ── Código único de acceso (contrato v17) ────────────────────────────────────
+
+export const CODIGO_ACCESO = { min: 6, max: 32 } as const;
+
+/**
+ * Código único de acceso: 6–32 caracteres sin espacios (letras, números, símbolos o una mezcla), distinto de la
+ * contraseña. Distingue mayúsculas; el largo se cuenta en caracteres, no en unidades UTF-16.
+ */
+export function validarCodigoAcceso(codigo: string, password: string): void {
+  const largo = [...codigo].length;
+  if (largo < CODIGO_ACCESO.min || largo > CODIGO_ACCESO.max) {
+    throw new DomainError(
+      "VALIDACION",
+      `El código debe tener entre ${CODIGO_ACCESO.min} y ${CODIGO_ACCESO.max} caracteres`,
+    );
+  }
+  if (/\s/u.test(codigo)) throw new DomainError("VALIDACION", "El código no puede tener espacios");
+  if (codigo === password) throw new DomainError("VALIDACION", "El código debe ser distinto de la contraseña");
+}
+
 // ── Gestión de usuarios por el ADMIN (contrato v12) ──────────────────────────
 
 export interface DatosNuevoUsuario {

@@ -42,6 +42,15 @@ export interface UsuarioRepository {
   actualizar(id: string, cambios: CambiosUsuarioRepo): Promise<UsuarioAdmin>;
   /** Usuarios CLIENTE activos por cliente (solo los clientes que tienen alguno). */
   accesosPortalPorCliente(): Promise<Map<string, number>>;
+
+  // ── Código único de acceso (v17): se guarda solo su huella ──
+  /** Cualquier estado (activo o no). */
+  buscarPorCodigoAcceso(huella: string): Promise<UsuarioConCredenciales | null>;
+  /** Desde cuándo tiene el código activo; null si no tiene. */
+  codigoAccesoActivoDesde(id: string): Promise<Date | null>;
+  /** Activa o reemplaza el código. Huella de otro usuario (carrera) → DomainError("CONFLICTO"). */
+  guardarCodigoAcceso(id: string, huella: string, en: Date): Promise<void>;
+  quitarCodigoAcceso(id: string): Promise<void>;
 }
 
 export interface FiltroUsuarios {

@@ -414,6 +414,41 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect((await repos.usuarios.buscarCredencialesPorId(op.id))?.passwordHash).toBe("hash-nuevo");
     });
 
+    it("usuarios: guarda, busca, reemplaza y quita el código único de acceso (v17)", async () => {
+      const op = USUARIOS_SEED[1]!;
+      const en = new Date("2026-10-20T15:00:00.000Z");
+      expect(await repos.usuarios.codigoAccesoActivoDesde(op.id)).toBeNull();
+      expect(await repos.usuarios.buscarPorCodigoAcceso("a".repeat(64))).toBeNull();
+
+      await repos.usuarios.guardarCodigoAcceso(op.id, "a".repeat(64), en);
+      expect(await repos.usuarios.codigoAccesoActivoDesde(op.id)).toEqual(en);
+      expect(await repos.usuarios.buscarPorCodigoAcceso("a".repeat(64))).toMatchObject({
+        id: op.id,
+        email: op.email,
+        rol: "OPERADOR",
+        activo: true,
+        passwordHash: expect.any(String),
+      });
+
+      // la huella identifica a un solo usuario
+      await expect(repos.usuarios.guardarCodigoAcceso(ADMIN.id, "a".repeat(64), en)).rejects.toMatchObject({
+        code: "CONFLICTO",
+      });
+      expect(await repos.usuarios.codigoAccesoActivoDesde(ADMIN.id)).toBeNull();
+
+      await repos.usuarios.guardarCodigoAcceso(op.id, "b".repeat(64), en);
+      expect(await repos.usuarios.buscarPorCodigoAcceso("a".repeat(64))).toBeNull();
+      expect((await repos.usuarios.buscarPorCodigoAcceso("b".repeat(64)))?.id).toBe(op.id);
+
+      // un usuario inactivo se sigue encontrando (el caso de uso decide)
+      await repos.usuarios.actualizar(op.id, { activo: false });
+      expect(await repos.usuarios.buscarPorCodigoAcceso("b".repeat(64))).toMatchObject({ id: op.id, activo: false });
+
+      await repos.usuarios.quitarCodigoAcceso(op.id);
+      expect(await repos.usuarios.buscarPorCodigoAcceso("b".repeat(64))).toBeNull();
+      expect(await repos.usuarios.codigoAccesoActivoDesde(op.id)).toBeNull();
+    });
+
     it("devuelve null para envíos inexistentes", async () => {
       expect(await repos.envios.buscarPorId("00000000-0000-4000-8000-0000000fffff")).toBeNull();
       expect(await repos.envios.existeNumeroGuia(999_999_999_999)).toBe(false);

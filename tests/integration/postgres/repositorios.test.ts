@@ -122,7 +122,7 @@ describe.skipIf(!url)("PostgreSQL", () => {
     // (sin cliente vinculado: el contrato parte sin clientes).
     for (const u of USUARIOS_SEED) {
       await db.query(
-        "UPDATE usuarios SET nombre = $2, email = $3, password_hash = $4, rol = $5, activo = TRUE, cliente_id = NULL WHERE id = $1",
+        "UPDATE usuarios SET nombre = $2, email = $3, password_hash = $4, rol = $5, activo = TRUE, cliente_id = NULL, codigo_acceso_hash = NULL, codigo_acceso_en = NULL WHERE id = $1",
         [u.id, u.nombre, u.email, `hash:${u.password}`, u.rol],
       );
     }

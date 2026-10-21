@@ -1,7 +1,12 @@
-import { randomInt } from "node:crypto";
+import { createHmac, randomInt } from "node:crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import type { GeneradorContrasenas, PasswordHasher, TokenService } from "../../application/ports/services.js";
+import type {
+  GeneradorContrasenas,
+  HuellaCodigoAcceso,
+  PasswordHasher,
+  TokenService,
+} from "../../application/ports/services.js";
 import { DomainError } from "../../domain/shared/DomainError.js";
 import { ROLES, type Actor } from "../../domain/usuario/Usuario.js";
 
@@ -36,6 +41,23 @@ export class JwtTokenService implements TokenService {
     } catch {
       throw new DomainError("NO_AUTENTICADO", "Sesión inválida o expirada");
     }
+  }
+}
+
+/**
+ * Huella del código único de acceso: HMAC-SHA256 con una clave derivada del secreto del JWT (separada por contexto, así
+ * la misma clave nunca firma tokens y huellas). Cambiar el secreto invalida los códigos guardados.
+ */
+export class HuellaCodigoHmac implements HuellaCodigoAcceso {
+  private readonly clave: Buffer;
+
+  constructor(secreto: string) {
+    this.clave = createHmac("sha256", secreto).update("pcargo:codigo-acceso:v1").digest();
+  }
+
+  huella(codigo: string): string {
+    // NFC: el mismo código escrito con otro teclado (p. ej. «ñ» compuesta) da la misma huella.
+    return createHmac("sha256", this.clave).update(codigo.normalize("NFC"), "utf8").digest("hex");
   }
 }
 

@@ -39,6 +39,14 @@ export const actualizarPerfilSchema = z
   })
   .refine((v) => v.nombre !== undefined || v.email !== undefined, "Debe enviar al menos un campo (nombre o email)");
 
+// Código único de acceso (v17): sus reglas (largo, sin espacios, distinto de la contraseña) viven en el dominio.
+export const loginCodigoSchema = z.object({ codigo: z.string().min(1, "obligatorio").max(200) });
+
+export const activarCodigoAccesoSchema = z.object({
+  password: z.string().min(1, "obligatorio").max(200),
+  codigo: z.string().max(200),
+});
+
 // La política de la contraseña nueva (largo, letra y número, distinta) vive en el dominio.
 export const cambiarContrasenaSchema = z.object({
   actual: z.string().min(1, "obligatorio").max(200),

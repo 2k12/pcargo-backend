@@ -19,6 +19,8 @@ export const REGLAS = {
     ventanaSeg: 15 * 60,
     clave: (req: Request) => `${req.ip}:${String(req.body?.email ?? "").trim().toLowerCase()}`,
   },
+  /** Login con código único (v17): solo por IP, el código es lo único que se envía. */
+  loginCodigo: { nombre: "login-codigo", limite: 20, ventanaSeg: 15 * 60 },
   /** Landing y rastreo público (cotizar, catálogo, seguimiento). */
   publico: { nombre: "publico", limite: 60, ventanaSeg: 60 },
   /** Cambio de contraseña: por usuario autenticado (frena adivinar la actual con un token robado). */

@@ -25,6 +25,7 @@ import type {
   AlmacenArchivos,
   Clock,
   GeneradorContrasenas,
+  HuellaCodigoAcceso,
   IdGenerator,
   PasswordHasher,
   TokenService,
@@ -63,6 +64,12 @@ import {
   ListarRepartidores,
   ListarUsuarios,
 } from "../application/use-cases/usuarios/Usuarios.js";
+import {
+  ActivarCodigoAcceso,
+  DesactivarCodigoAcceso,
+  LoginConCodigo,
+  ObtenerCodigoAcceso,
+} from "../application/use-cases/auth/CodigoAcceso.js";
 import { Login } from "../application/use-cases/auth/Login.js";
 import { ObtenerPerfil } from "../application/use-cases/auth/ObtenerPerfil.js";
 import { ActualizarPerfil, CambiarContrasena } from "../application/use-cases/auth/Perfil.js";
@@ -184,7 +191,12 @@ import {
 } from "./persistence/postgres/PgRepositories.js";
 import { crearPool, type Db } from "./persistence/postgres/pool.js";
 import { CLIENTES_SEED, USUARIOS_SEED } from "./persistence/seed-data.js";
-import { BcryptPasswordHasher, GeneradorContrasenasCrypto, JwtTokenService } from "./security/adapters.js";
+import {
+  BcryptPasswordHasher,
+  GeneradorContrasenasCrypto,
+  HuellaCodigoHmac,
+  JwtTokenService,
+} from "./security/adapters.js";
 import { ServicioApiKeysCrypto } from "./security/apiKeys.js";
 import { CifradorAesGcm, CifradorNoConfigurado, leerClaveCifrado } from "./security/cifrado.js";
 import { SecretosWebhookCrypto } from "./security/firmaWebhook.js";
@@ -224,6 +236,8 @@ export interface Adaptadores {
   /** Plazo de conservación declarado y solicitudes del titular (LOPDP). */
   datosPersonales: DatosPersonalesRepository;
   contrasenas: GeneradorContrasenas;
+  /** v17: huella del código único de acceso. */
+  huellasCodigo: HuellaCodigoAcceso;
 }
 
 export interface OpcionesCasos {
@@ -302,6 +316,11 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     // Ninguna lectura cacheada muestra nombres de operadores: editar el perfil no invalida cachés.
     actualizarPerfil: new ActualizarPerfil(a.usuarios, a.tokens),
     cambiarContrasena: new CambiarContrasena(a.usuarios, a.hasher),
+    // Código único de acceso (v17).
+    loginConCodigo: new LoginConCodigo(a.usuarios, a.huellasCodigo, a.tokens),
+    codigoAcceso: new ObtenerCodigoAcceso(a.usuarios),
+    activarCodigoAcceso: new ActivarCodigoAcceso(a.usuarios, a.hasher, a.huellasCodigo, a.clock),
+    desactivarCodigoAcceso: new DesactivarCodigoAcceso(a.usuarios),
     listarCiudades: conCache(new ListarCiudades(a.ciudades), cache, {
       clave: (f) => claveCatalogo(`ciudades:${enCatalogo(f?.activa)}`),
       ttlSeg: TTL.catalogo,
@@ -503,6 +522,7 @@ export async function adaptadoresEnMemoria(
     caja,
     datosPersonales: new InMemoryDatosPersonalesRepository(),
     contrasenas: new GeneradorContrasenasCrypto(),
+    huellasCodigo: new HuellaCodigoHmac(jwtSecret),
     ...sobrescribir,
   };
 }
@@ -537,6 +557,7 @@ export function adaptadoresPostgres(
     caja: new PgCajaRepository(db),
     datosPersonales: new PgDatosPersonalesRepository(db),
     contrasenas: new GeneradorContrasenasCrypto(),
+    huellasCodigo: new HuellaCodigoHmac(config.JWT_SECRET),
   };
 }
 

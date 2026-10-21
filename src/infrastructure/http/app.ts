@@ -27,6 +27,7 @@ export function crearApp(casos: CasosDeUso, opciones: OpcionesApp = {}): Express
   app.use(express.json({ limit: "100kb" }));
   if (opciones.limitador) {
     app.post("/api/auth/login", limitarTasa(opciones.limitador, REGLAS.login));
+    app.post("/api/auth/login/codigo", limitarTasa(opciones.limitador, REGLAS.loginCodigo));
     app.use(["/api/publico", "/api/seguimiento"], limitarTasa(opciones.limitador, REGLAS.publico));
   }
   app.use("/api", crearRouter(casos, { limitador: opciones.limitador }));

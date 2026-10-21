@@ -19,6 +19,14 @@ export interface IdGenerator {
   uuid(): string;
 }
 
+/**
+ * Huella del código único de acceso (v17): determinista para buscar al usuario por ella, con una clave del servidor
+ * para que una copia de la base no permita probar códigos sin esa clave.
+ */
+export interface HuellaCodigoAcceso {
+  huella(codigo: string): string;
+}
+
 /** Contraseñas temporales (accesos al portal): letras y números, generadas criptográficamente. */
 export interface GeneradorContrasenas {
   temporal(largo: number): string;

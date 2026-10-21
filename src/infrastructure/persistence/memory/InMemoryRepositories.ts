@@ -29,8 +29,12 @@ import { ARTICULOS_SEED, CIUDADES, RUTAS_SEED, TIPOS_CARGA_SEED } from "../seed-
 
 // Adaptadores en memoria: usados en tests y en `DB_DRIVER=memory` (demo sin Postgres).
 
-/** Usuario guardado en memoria (con hash y fecha de alta). */
-export type UsuarioMemoria = Omit<UsuarioConCredenciales, "clienteId"> & { clienteId?: string | null; creadoEn?: Date };
+/** Usuario guardado en memoria (con hash, fecha de alta y huella del código único de acceso). */
+export type UsuarioMemoria = Omit<UsuarioConCredenciales, "clienteId"> & {
+  clienteId?: string | null;
+  creadoEn?: Date;
+  codigoAcceso?: { huella: string; en: Date } | null;
+};
 
 /** Fecha de alta de los usuarios semilla en memoria. */
 const FECHA_USUARIOS_SEED = new Date("2026-10-01T00:00:00.000Z");
@@ -137,6 +141,29 @@ export class InMemoryUsuarioRepository implements UsuarioRepository {
       if (u.rol === "CLIENTE" && u.activo && u.clienteId) mapa.set(u.clienteId, (mapa.get(u.clienteId) ?? 0) + 1);
     }
     return mapa;
+  }
+
+  async buscarPorCodigoAcceso(huella: string): Promise<UsuarioConCredenciales | null> {
+    const u = this.usuarios.find((x) => x.codigoAcceso?.huella === huella);
+    return u ? conCredenciales(u) : null;
+  }
+
+  async codigoAccesoActivoDesde(id: string): Promise<Date | null> {
+    const en = this.usuarios.find((x) => x.id === id)?.codigoAcceso?.en;
+    return en ? new Date(en) : null;
+  }
+
+  async guardarCodigoAcceso(id: string, huella: string, en: Date): Promise<void> {
+    if (this.usuarios.some((x) => x.id !== id && x.codigoAcceso?.huella === huella)) {
+      throw new DomainError("CONFLICTO", "Ese código no está disponible, elige otro");
+    }
+    const u = this.usuarios.find((x) => x.id === id);
+    if (u) u.codigoAcceso = { huella, en: new Date(en) };
+  }
+
+  async quitarCodigoAcceso(id: string): Promise<void> {
+    const u = this.usuarios.find((x) => x.id === id);
+    if (u) u.codigoAcceso = null;
   }
 
   /** Al eliminar un cliente: desactiva sus usuarios del portal y los desvincula. Devuelve cuántos estaban activos. */
