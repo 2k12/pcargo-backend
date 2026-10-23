@@ -180,6 +180,37 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(p.total).toBeGreaterThanOrEqual(3);
     });
 
+    it("guarda la fecha de la guía y filtra por ella (v18): desde y hasta inclusivos", async () => {
+      // Todos registrados el 2026-10-01 (Ecuador); la guía de cada uno lleva otra fecha.
+      const [hoy, d5, d10, d20] = [
+        nuevoEnvio(0),
+        nuevoEnvio(1, { fechaGuia: "2026-10-05" }),
+        nuevoEnvio(2, { fechaGuia: "2026-10-10" }),
+        nuevoEnvio(3, { fechaGuia: "2026-10-20" }),
+      ];
+      for (const e of [hoy, d5, d10, d20]) await repos.envios.guardar(e);
+      expect((await repos.envios.buscarPorId(hoy.id))!.fechaGuia).toBe("2026-10-01");
+      expect((await repos.envios.buscarPorId(d10.id))!.fechaGuia).toBe("2026-10-10");
+      // un cambio de estado no altera la fecha de la guía
+      d10.cambiarEstado("EN_TRANSITO", { ahora: new Date(Date.UTC(2026, 9, 3, 12)), actor: OPERADOR });
+      await repos.envios.guardar(d10);
+      expect((await repos.envios.buscarPorId(d10.id))!.fechaGuia).toBe("2026-10-10");
+
+      const mios = [hoy.id, d5.id, d10.id, d20.id];
+      const ids = async (f: Parameters<typeof repos.envios.listar>[0]) =>
+        (await repos.envios.listar(f)).map((e) => e.id).filter((id) => mios.includes(id));
+      expect(await ids({ fechaGuiaDesde: "2026-10-05", fechaGuiaHasta: "2026-10-10" })).toEqual([d10.id, d5.id]);
+      expect(await ids({ fechaGuiaDesde: "2026-10-10" })).toEqual([d20.id, d10.id]);
+      expect(await ids({ fechaGuiaHasta: "2026-10-01" })).toEqual([hoy.id]);
+      expect(await ids({ fechaGuiaDesde: "2026-10-21" })).toEqual([]);
+      const p = await repos.envios.listarPagina(
+        { fechaGuiaDesde: "2026-10-02", fechaGuiaHasta: "2026-10-31", q: hoy.toSnapshot().remitente.nombre },
+        { pagina: 1, porPagina: 2 },
+      );
+      expect(p.envios.map((e) => e.id)).toEqual([d20.id, d10.id]);
+      expect(p.total).toBe(3);
+    });
+
     it("pagina con orden estable y total del filtro", async () => {
       // Tres envíos con la MISMA fecha: el desempate por id evita repetir o saltar filas entre páginas.
       const iguales = [nuevoEnvio(50), nuevoEnvio(50), nuevoEnvio(50)];

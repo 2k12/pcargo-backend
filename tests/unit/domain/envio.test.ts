@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { Envio, type NuevoEnvio } from "../../../src/domain/envio/Envio.js";
+import { Envio, validarFechaGuia, type NuevoEnvio } from "../../../src/domain/envio/Envio.js";
+import { fechaLocalEC } from "../../../src/domain/shared/FechaEcuador.js";
 import { ESTADOS, puedeTransicionar } from "../../../src/domain/envio/EstadoEnvio.js";
 import { pareceNumeroGuia, parsearNumeroGuia } from "../../../src/domain/envio/NumeroGuia.js";
 import { conEstado, esOperativa, nombreRuta, normalizarNombreCiudad, validarDatosRuta } from "../../../src/domain/ruta/Ruta.js";
@@ -72,6 +73,50 @@ describe("Envio", () => {
         costo: 159.75,
         costoAdicional: 2.25,
       });
+    });
+  });
+
+  describe("fecha de la guía (v18)", () => {
+    // ahora = 2026-10-01 10:00 UTC = 2026-10-01 05:00 en Ecuador → hoy 2026-10-01, máximo 2026-12-30.
+    it.each([[undefined], [null], [""], ["  "]])("vacía (%o) → hoy en Ecuador", (fechaGuia) => {
+      expect(crear({ fechaGuia: fechaGuia as string | null | undefined }).fechaGuia).toBe("2026-10-01");
+    });
+
+    it("usa el día de Ecuador, no el de UTC (21:00 EC ya es el día siguiente en UTC)", () => {
+      const noche = new Date("2026-10-02T02:00:00Z"); // 2026-10-01 21:00 en Ecuador
+      const e = Envio.crear(datos, { id: "e2", numeroGuia: 1, ahora: noche, actor: OPERADOR });
+      expect(e.fechaGuia).toBe("2026-10-01");
+      expect(validarFechaGuia("2026-10-01", fechaLocalEC(noche))).toBe("2026-10-01");
+    });
+
+    it.each([["2026-10-01"], ["2026-10-02"], [" 2026-11-15 "], ["2026-12-30"]])(
+      "%s (hoy..hoy+90) se acepta y se guarda",
+      (fechaGuia) => {
+        const e = crear({ fechaGuia });
+        expect(e.fechaGuia).toBe(fechaGuia.trim());
+        expect(e.toSnapshot().fechaGuia).toBe(fechaGuia.trim());
+        expect(e.registro.fecha).toEqual(ahora); // el registro sigue siendo el momento real de creación
+      },
+    );
+
+    it.each([
+      ["2026-09-30", /anterior a hoy/],
+      ["2025-10-01", /anterior a hoy/],
+      ["2026-12-31", /como máximo 90 días.*2026-12-30/],
+      ["2027-01-15", /como máximo 90 días/],
+      ["01/10/2026", /formato AAAA-MM-DD/],
+      ["2026-10-1", /formato AAAA-MM-DD/],
+      ["2026-02-30", /formato AAAA-MM-DD/],
+      ["2026-13-01", /formato AAAA-MM-DD/],
+      ["hoy", /formato AAAA-MM-DD/],
+    ])("%s → VALIDACION", (fechaGuia, mensaje) => {
+      expect(() => crear({ fechaGuia })).toThrow(expect.objectContaining({ code: "VALIDACION", message: expect.stringMatching(mensaje) }));
+    });
+
+    it("reconstruir usa el día (Ecuador) del registro si falta (envíos anteriores a v18) y conserva la guardada", () => {
+      const { fechaGuia: _omitida, ...viejo } = crear().toSnapshot();
+      expect(Envio.reconstruir({ ...viejo, creadoEn: new Date("2026-03-11T04:30:00Z") }).fechaGuia).toBe("2026-03-10");
+      expect(Envio.reconstruir(crear({ fechaGuia: "2026-10-20" }).toSnapshot()).fechaGuia).toBe("2026-10-20");
     });
   });
 

@@ -507,6 +507,8 @@ interface EnvioRow {
   descripcion: string | null;
   costo: number;
   costo_adicional: number | null;
+  /** DATE como texto `AAAA-MM-DD` (ver pool.ts). */
+  fecha_guia: string | null;
   forma_pago: FormaPago;
   estado: EstadoEnvio;
   creado_por: string | null;
@@ -598,8 +600,10 @@ export class PgEnvioRepository implements EnvioRepository {
             destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, descripcion,
             costo, forma_pago, estado, creado_por, creado_en, actualizado_en, cliente_id, zona,
             remitente_direccion, evidencia_recibido_por, evidencia_tipo, evidencia_bytes, evidencia_subida_en,
-            evidencia_subida_por, evidencia_clave, integracion_id, referencia_externa, anonimizado_en, costo_adicional)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
+            evidencia_subida_por, evidencia_clave, integracion_id, referencia_externa, anonimizado_en, costo_adicional,
+            fecha_guia)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+            $31)
          ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en,
             evidencia_recibido_por = EXCLUDED.evidencia_recibido_por, evidencia_tipo = EXCLUDED.evidencia_tipo,
             evidencia_bytes = EXCLUDED.evidencia_bytes, evidencia_subida_en = EXCLUDED.evidencia_subida_en,
@@ -628,7 +632,7 @@ export class PgEnvioRepository implements EnvioRepository {
           s.clienteId ?? null, s.zona, s.remitente.direccion,
           ev?.recibidoPor ?? null, ev?.tipo ?? null, ev?.bytes ?? null, ev?.subidaEn ?? null,
           ev?.subidaPor?.id ?? null, ev?.clave ?? null, s.integracionId ?? null, s.referenciaExterna ?? null,
-          s.anonimizadoEn ?? null, s.costoAdicional,
+          s.anonimizadoEn ?? null, s.costoAdicional, s.fechaGuia,
         ],
       );
       if (upsert.rows[0]?.nuevo) {
@@ -770,6 +774,8 @@ export class PgEnvioRepository implements EnvioRepository {
     if (f.actualizadoDesde) cond.push(`e.actualizado_en >= $${params.push(f.actualizadoDesde)}`);
     if (f.registradoDesde) cond.push(`e.creado_en >= $${params.push(f.registradoDesde)}`);
     if (f.registradoHasta) cond.push(`e.creado_en < $${params.push(f.registradoHasta)}`);
+    if (f.fechaGuiaDesde) cond.push(`e.fecha_guia >= $${params.push(f.fechaGuiaDesde)}::date`);
+    if (f.fechaGuiaHasta) cond.push(`e.fecha_guia <= $${params.push(f.fechaGuiaHasta)}::date`);
     if (f.telefono) {
       const i = params.push(f.telefono);
       cond.push(
@@ -858,6 +864,7 @@ export class PgEnvioRepository implements EnvioRepository {
         descripcion: r.descripcion,
         costo: r.costo,
         costoAdicional: r.costo_adicional ?? 0,
+        fechaGuia: r.fecha_guia,
         estado: r.estado,
         creadoPor: r.creado_por,
         creadoEn: r.creado_en,

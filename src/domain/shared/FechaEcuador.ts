@@ -18,6 +18,14 @@ export const inicioDiaEC = (fecha: string): Date => new Date(aTiempo(fecha) - OF
 /** Primer día del mes local de Ecuador que contiene `d`. */
 export const inicioMesEC = (d: Date): string => `${fechaLocalEC(d).slice(0, 8)}01`;
 
+/** `true` si es una fecha `AAAA-MM-DD` que existe en el calendario (rechaza 2026-02-30). */
+export const esFechaEC = (texto: string): boolean =>
+  FECHA.test(texto) && !Number.isNaN(aTiempo(texto)) && new Date(aTiempo(texto)).toISOString().slice(0, 10) === texto;
+
+/** Suma `dias` (puede ser negativo) a una fecha `AAAA-MM-DD`. */
+export const sumarDiasEC = (fecha: string, dias: number): string =>
+  new Date(aTiempo(fecha) + dias * DIA_MS).toISOString().slice(0, 10);
+
 /** Valida el formato `AAAA-MM-DD` (400 VALIDACION, como el filtro del dashboard). */
 export function validarFechaEC(texto: string | undefined, campo: string): void {
   if (texto !== undefined && (!FECHA.test(texto) || Number.isNaN(aTiempo(texto)))) {

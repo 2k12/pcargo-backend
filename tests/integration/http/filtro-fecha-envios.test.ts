@@ -6,7 +6,8 @@ import { crearApp } from "../../../src/infrastructure/http/app.js";
 import { Envio } from "../../../src/domain/envio/Envio.js";
 import { JWT_SECRET_TEST, OPERADOR, solicitudEnvio } from "../../helpers/fakes.js";
 
-// Contrato v16: GET /envios?desde=&hasta= filtra por la fecha de REGISTRO en hora de Ecuador (UTC−5), inclusive.
+// Contrato v16: GET /envios?desde=&hasta= filtra por día en hora de Ecuador (UTC−5), inclusive. Desde v18 sobre la
+// fecha de la guía, que en estos envíos (sin fecha elegida) es el día de su registro.
 
 let app: Express;
 let adaptadores: Adaptadores;

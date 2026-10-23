@@ -167,6 +167,11 @@ export interface FiltroEnvios {
   registradoDesde?: Date;
   /** `creadoEn` < este instante (exclusivo). */
   registradoHasta?: Date;
+  // ── v18 ──
+  /** `fechaGuia` ≥ esta fecha `AAAA-MM-DD` (inclusive). */
+  fechaGuiaDesde?: string;
+  /** `fechaGuia` ≤ esta fecha `AAAA-MM-DD` (inclusive). */
+  fechaGuiaHasta?: string;
 }
 
 export interface Paginacion {

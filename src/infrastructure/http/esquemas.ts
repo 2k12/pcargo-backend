@@ -93,6 +93,8 @@ export const crearEnvioSchema = cotizacionSchema.extend({
   numeroGuia: z.union([z.string().max(40), z.number()]).nullish(),
   // v15: recargo en USD; el dominio valida ≥ 0, ≤ 9999.99 y hasta 2 decimales (400 VALIDACION)
   costoAdicional: z.number().optional(),
+  // v18: fecha de la guía AAAA-MM-DD; el dominio valida formato y rango hoy..hoy+90 (400 VALIDACION)
+  fechaGuia: z.string("La fecha de la guía debe tener el formato AAAA-MM-DD").max(20).nullish(),
   clienteId: z.uuid("cliente inválido").nullish(),
   guardarCliente: z.boolean().optional(),
   // el caso de uso exige `true` junto con guardarCliente (422); sin guardarCliente se ignora
@@ -117,7 +119,7 @@ export const filtroEnviosSchema = z.object({
     .optional()
     .transform((v) => (v === "ninguno" ? null : v)),
   q: z.string().optional(),
-  // v16: fechas AAAA-MM-DD de Ecuador (inclusive) sobre la fecha de registro; el caso de uso valida (422)
+  // v16: fechas AAAA-MM-DD de Ecuador (inclusive) sobre la fecha de la guía (v18); el caso de uso valida (400)
   desde: z.string().optional(),
   hasta: z.string().optional(),
 });

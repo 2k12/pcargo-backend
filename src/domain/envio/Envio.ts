@@ -2,6 +2,7 @@ import type { TipoCargaCodigo } from "../carga/TipoCarga.js";
 import { validarReferenciaExterna } from "../integracion/EnvioExterno.js";
 import type { OrigenEnvio } from "../integracion/Integracion.js";
 import { DomainError, redondear2 } from "../shared/DomainError.js";
+import { esFechaEC, fechaLocalEC, sumarDiasEC } from "../shared/FechaEcuador.js";
 import { ZONA_POR_DEFECTO, type Zona } from "../tarifa/Zona.js";
 import type { Actor } from "../usuario/Usuario.js";
 import {
@@ -75,6 +76,12 @@ export interface EnvioProps {
   costo: number;
   /** Recargo acordado al crear el envío desde el panel (v15); 0 si no hubo. Ya está incluido en `costo`. */
   costoAdicional: number;
+  /**
+   * Fecha `AAAA-MM-DD` (Ecuador) que lleva la guía impresa y con la que se agrupan los envíos por día (v18). Al crear
+   * desde el panel puede ser hoy o posterior (hasta 90 días); por defecto, hoy. Los envíos anteriores a v18 usan el
+   * día de su registro.
+   */
+  fechaGuia: string;
   estado: EstadoEnvio;
   creadoPor: string | null;
   creadoEn: Date;
@@ -114,6 +121,38 @@ export interface NuevoEnvio {
   referenciaExterna?: string | null;
   /** Recargo en USD (≥ 0, hasta 2 decimales, ≤ 9999.99) que se suma al costo. Por defecto 0. */
   costoAdicional?: number;
+  /** v18: fecha de la guía `AAAA-MM-DD` (Ecuador), hoy..hoy+90. Vacía → hoy. */
+  fechaGuia?: string | null;
+}
+
+/** Días hacia adelante que se admiten como fecha de la guía (v18). */
+export const MAX_DIAS_FECHA_GUIA = 90;
+
+/**
+ * Valida la fecha de la guía respecto de `hoy` (fecha local de Ecuador): formato `AAAA-MM-DD`, no anterior a hoy y
+ * como máximo hoy + 90 días. Vacía (undefined, null o "") → hoy.
+ */
+export function validarFechaGuia(valor: string | null | undefined, hoy: string): string {
+  if (valor === undefined || valor === null) return hoy;
+  if (typeof valor !== "string") {
+    throw new DomainError("VALIDACION", "La fecha de la guía debe tener el formato AAAA-MM-DD");
+  }
+  const fecha = valor.trim();
+  if (fecha === "") return hoy;
+  if (!esFechaEC(fecha)) {
+    throw new DomainError("VALIDACION", "La fecha de la guía debe ser una fecha válida con el formato AAAA-MM-DD");
+  }
+  if (fecha < hoy) {
+    throw new DomainError("VALIDACION", `La fecha de la guía no puede ser anterior a hoy (${hoy})`);
+  }
+  const maxima = sumarDiasEC(hoy, MAX_DIAS_FECHA_GUIA);
+  if (fecha > maxima) {
+    throw new DomainError(
+      "VALIDACION",
+      `La fecha de la guía puede ser como máximo ${MAX_DIAS_FECHA_GUIA} días después de hoy (hasta ${maxima})`,
+    );
+  }
+  return fecha;
 }
 
 export const MAX_COSTO_ADICIONAL = 9999.99;
@@ -174,6 +213,7 @@ export class Envio {
       throw new DomainError("VALIDACION", "La referencia externa solo aplica a envíos ingresados por API");
     }
     const costoAdicional = validarCostoAdicional(datos.costoAdicional);
+    const fechaGuia = validarFechaGuia(datos.fechaGuia, fechaLocalEC(ctx.ahora));
     const usuario = ctx.actor ? { id: ctx.actor.id, nombre: ctx.actor.nombre } : null;
     return new Envio({
       id: ctx.id,
@@ -196,6 +236,7 @@ export class Envio {
       descripcion: datos.descripcion?.trim() || null,
       costo: redondear2(datos.items.reduce((s, i) => s + i.subtotal, 0) + costoAdicional),
       costoAdicional,
+      fechaGuia,
       estado: "REGISTRADO",
       creadoPor: ctx.actor?.id ?? null,
       creadoEn: ctx.ahora,
@@ -211,11 +252,17 @@ export class Envio {
     });
   }
 
-  /** `costoAdicional` ausente (envíos anteriores a v15) → 0. */
-  static reconstruir(props: Omit<EnvioProps, "costoAdicional"> & { costoAdicional?: number | null }): Envio {
+  /**
+   * `costoAdicional` ausente (envíos anteriores a v15) → 0; `fechaGuia` ausente (anteriores a v18) → día (Ecuador)
+   * del registro.
+   */
+  static reconstruir(
+    props: Omit<EnvioProps, "costoAdicional" | "fechaGuia"> & { costoAdicional?: number | null; fechaGuia?: string | null },
+  ): Envio {
     return new Envio({
       ...props,
       costoAdicional: props.costoAdicional ?? 0,
+      fechaGuia: props.fechaGuia || fechaLocalEC(props.creadoEn),
       remitente: { ...props.remitente, direccion: props.remitente.direccion ?? null },
       items: [...props.items],
       historial: [...props.historial],
@@ -347,6 +394,11 @@ export class Envio {
 
   get costoAdicional(): number {
     return this.props.costoAdicional;
+  }
+
+  /** Fecha de la guía `AAAA-MM-DD` (Ecuador, v18). */
+  get fechaGuia(): string {
+    return this.props.fechaGuia;
   }
 
   get actualizadoEn(): Date {

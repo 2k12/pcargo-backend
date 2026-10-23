@@ -161,6 +161,34 @@ describe("Estados, consultas y seguimiento", () => {
     await expect(c.listarEnvios.ejecutar({ desde: "2026-10-02", hasta: "2026-10-01" })).rejects.toMatchObject({ code: "VALIDACION" });
   });
 
+  it("fecha de la guía (v18): por defecto hoy (Ecuador), elegible hasta +90 días y es la que filtra desde/hasta", async () => {
+    // Reloj: 2026-10-01 07:00 EC → hoy 2026-10-01, máximo 2026-12-30.
+    const hoy = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
+    const vacia = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ fechaGuia: "" }));
+    const futura = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ fechaGuia: "2026-10-05" }));
+    const limite = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ fechaGuia: "2026-12-30" }));
+    expect([hoy.fechaGuia, vacia.fechaGuia, futura.fechaGuia, limite.fechaGuia]).toEqual([
+      "2026-10-01",
+      "2026-10-01",
+      "2026-10-05",
+      "2026-12-30",
+    ]);
+    // el registro sigue siendo el momento real de creación
+    expect(futura.registro.fecha).toBe("2026-10-01T12:00:00.000Z");
+    expect((await c.obtenerEnvio.ejecutar(futura.id)).fechaGuia).toBe("2026-10-05");
+
+    for (const fechaGuia of ["2026-09-30", "2026-12-31", "05/10/2026"]) {
+      await expect(c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ fechaGuia }))).rejects.toMatchObject({ code: "VALIDACION" });
+    }
+
+    const ids = async (f: { desde?: string; hasta?: string }) => (await c.listarEnvios.ejecutar(f)).datos.map((e) => e.id);
+    // todos se registraron hoy, pero se agrupan por la fecha de la guía
+    expect(await ids({ desde: "2026-10-01", hasta: "2026-10-01" })).toEqual([vacia.id, hoy.id]);
+    expect(await ids({ desde: "2026-10-05", hasta: "2026-10-05" })).toEqual([futura.id]);
+    expect(await ids({ desde: "2026-10-02" })).toEqual([limite.id, futura.id]);
+    expect(await ids({ hasta: "2026-12-29" })).toEqual([futura.id, vacia.id, hoy.id]);
+  });
+
   it("pagina el listado en el servidor y acota el tamaño de página", async () => {
     const ids: string[] = [];
     for (let i = 0; i < 5; i++) {

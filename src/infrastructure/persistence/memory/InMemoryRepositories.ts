@@ -552,6 +552,8 @@ export class InMemoryEnvioRepository implements EnvioRepository {
       .filter((p) => !filtro.actualizadoDesde || p.actualizadoEn >= filtro.actualizadoDesde)
       .filter((p) => !filtro.registradoDesde || p.creadoEn >= filtro.registradoDesde)
       .filter((p) => !filtro.registradoHasta || p.creadoEn < filtro.registradoHasta)
+      .filter((p) => !filtro.fechaGuiaDesde || p.fechaGuia >= filtro.fechaGuiaDesde)
+      .filter((p) => !filtro.fechaGuiaHasta || p.fechaGuia <= filtro.fechaGuiaHasta)
       .filter(
         (p) =>
           !filtro.telefono ||

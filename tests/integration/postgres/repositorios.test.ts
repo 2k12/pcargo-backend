@@ -291,3 +291,63 @@ describe.skipIf(!url)("Migración 008 (precio por tipo y zona) sobre datos v7", 
     await expect(db.query("UPDATE tipos_carga SET precio = 0 WHERE codigo = 'SOBRE'")).rejects.toMatchObject({ code: "23514" });
   });
 });
+
+// Migración 015 sobre una BD en v17 con envíos: la fecha de la guía toma el día (Ecuador, UTC−5) del registro.
+describe.skipIf(!url)("Migración 015 (fecha de la guía) sobre datos v17", () => {
+  const ESQUEMA = "migracion_v17";
+  let db: Db;
+
+  beforeAll(async () => {
+    const admin = crearPool(url!);
+    await admin.query(`DROP SCHEMA IF EXISTS ${ESQUEMA} CASCADE; CREATE SCHEMA ${ESQUEMA};`);
+    await admin.end();
+    db = new pg.Pool({ connectionString: url!, max: 2, options: `-c search_path=${ESQUEMA},public` });
+
+    const dir = join(import.meta.dirname, "..", "..", "..", "db", "migrations");
+    await db.query("CREATE TABLE schema_migrations (nombre TEXT PRIMARY KEY, aplicada_en TIMESTAMPTZ NOT NULL DEFAULT now())");
+    for (const archivo of (await readdir(dir)).filter((f) => f.endsWith(".sql") && f < "015").sort()) {
+      await db.query(await readFile(join(dir, archivo), "utf8"));
+      await db.query("INSERT INTO schema_migrations (nombre) VALUES ($1)", [archivo]);
+    }
+    await db.query(`INSERT INTO ciudades (id, nombre) VALUES (1, 'Ibarra'), (4, 'Quito')`);
+    await db.query(`INSERT INTO rutas (id, origen_id, destino_id, tiempo_estimado_min) VALUES (1, 1, 4, 180)`);
+    const envio = (n: number, creadoEn: string) =>
+      db.query(
+        `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,
+           destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, costo, forma_pago, creado_en)
+         VALUES ($1, $2, 'Ana', '0991234567', 'Luis', '0987654321', 'Quito', 1, 1, 1, 3, 'PAGADO', $3)`,
+        [`00000000-0000-4000-d015-${String(n).padStart(12, "0")}`, n, creadoEn],
+      );
+    await envio(1, "2026-03-10T04:59:00Z"); // 2026-03-09 23:59 en Ecuador
+    await envio(2, "2026-03-10T05:00:00Z"); // 2026-03-10 00:00 en Ecuador
+    await envio(3, "2026-03-11T04:30:00Z"); // 2026-03-10 23:30 en Ecuador (en UTC ya es el 11)
+
+    await migrar(db, () => {}); // solo aplica 015
+  });
+
+  afterAll(async () => {
+    await db?.end();
+    const admin = crearPool(url!);
+    await admin.query(`DROP SCHEMA IF EXISTS ${ESQUEMA} CASCADE`);
+    await admin.end();
+  });
+
+  it("rellena fecha_guia con el día de Ecuador del registro y la deja NOT NULL", async () => {
+    const { rows } = await db.query("SELECT numero_guia, fecha_guia FROM envios ORDER BY numero_guia");
+    expect(rows.map((r) => [Number(r.numero_guia), r.fecha_guia])).toEqual([
+      [1, "2026-03-09"],
+      [2, "2026-03-10"],
+      [3, "2026-03-10"],
+    ]);
+    await expect(db.query("UPDATE envios SET fecha_guia = NULL WHERE numero_guia = 1")).rejects.toMatchObject({ code: "23502" });
+    const { rows: indices } = await db.query("SELECT 1 FROM pg_indexes WHERE indexname = 'envios_fecha_guia_idx'");
+    expect(indices.length).toBeGreaterThan(0);
+  });
+
+  it("el repositorio la expone y filtra por ella", async () => {
+    const repo = new PgEnvioRepository(db);
+    expect((await repo.buscarPorNumeroGuia(3))!.fechaGuia).toBe("2026-03-10");
+    const guias = (await repo.listar({ fechaGuiaDesde: "2026-03-10", fechaGuiaHasta: "2026-03-10" })).map((e) => e.numeroGuia);
+    expect(guias).toEqual([3, 2]);
+  });
+});

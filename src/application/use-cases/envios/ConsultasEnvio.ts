@@ -4,7 +4,7 @@ import { pareceNumeroGuia, parsearNumeroGuia } from "../../../domain/envio/Numer
 import { esEstado } from "../../../domain/envio/EstadoEnvio.js";
 import type { Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
-import { DIA_MS, inicioDiaEC, validarRangoEC } from "../../../domain/shared/FechaEcuador.js";
+import { validarRangoEC } from "../../../domain/shared/FechaEcuador.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, toEventoDTO, type EnvioDTO, type EventoHistorialDTO } from "../../dto/EnvioDTO.js";
 import type {
@@ -41,7 +41,10 @@ export interface PaginaDTO<T> {
   totalPaginas: number;
 }
 
-/** Filtro del listado del panel: `desde`/`hasta` son fechas `AAAA-MM-DD` de Ecuador (v16, inclusive). */
+/**
+ * Filtro del listado del panel: `desde`/`hasta` son fechas `AAAA-MM-DD` de Ecuador (v16, inclusive) sobre la fecha de
+ * la guía (v18; antes, la de registro).
+ */
 export interface FiltroListarEnvios extends FiltroEnvios {
   desde?: string;
   hasta?: string;
@@ -60,8 +63,8 @@ export class ListarEnvios {
   ): Promise<PaginaDTO<EnvioDTO>> {
     validarRangoEC(desde, hasta);
     const filtro: FiltroEnvios = { ...resto };
-    if (desde) filtro.registradoDesde = inicioDiaEC(desde);
-    if (hasta) filtro.registradoHasta = new Date(inicioDiaEC(hasta).getTime() + DIA_MS);
+    if (desde) filtro.fechaGuiaDesde = desde;
+    if (hasta) filtro.fechaGuiaHasta = hasta;
     const porPagina = Math.min(Math.max(1, Math.trunc(paginacion.porPagina ?? POR_PAGINA_DEFECTO)), POR_PAGINA_MAX);
     const pagina = Math.max(1, Math.trunc(paginacion.pagina ?? 1));
     // Si el texto es un número, también busca la guía exacta sin importar ceros a la izquierda.

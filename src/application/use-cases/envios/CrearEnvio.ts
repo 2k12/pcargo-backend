@@ -26,6 +26,8 @@ export interface SolicitudEnvio {
   numeroGuia?: string | number | null;
   /** v15: recargo en USD sumado al costo (solo panel; la API de empresas y el portal no lo envían). */
   costoAdicional?: number;
+  /** v18: fecha de la guía AAAA-MM-DD (solo panel; la API de empresas y el portal no la envían: siempre hoy). */
+  fechaGuia?: string | null;
   /** Cliente frecuente que envía. */
   clienteId?: string | null;
   /** Sin `clienteId`: guarda al remitente como cliente frecuente (o reutiliza el que tenga su teléfono). */
@@ -91,6 +93,7 @@ export class CrearEnvio {
       formaPago: s.formaPago,
       descripcion: s.descripcion,
       costoAdicional: s.costoAdicional,
+      fechaGuia: s.fechaGuia,
       integracion: o.integracion ?? null,
       referenciaExterna: o.referenciaExterna ?? null,
     };
