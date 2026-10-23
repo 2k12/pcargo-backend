@@ -125,7 +125,7 @@ export interface NuevoEnvio {
   fechaGuia?: string | null;
 }
 
-/** Días hacia adelante que se admiten como fecha de la guía (v18). */
+/** Días hacia adelante que se admiten como fecha de la guía (v18), contados desde hoy en Ecuador. */
 export const MAX_DIAS_FECHA_GUIA = 90;
 
 /**
