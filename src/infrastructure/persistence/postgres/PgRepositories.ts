@@ -530,13 +530,14 @@ interface EnvioRow {
   anonimizado_en: Date | null;
 }
 
+// v19: la evidencia existe si tiene fecha; el nombre y la foto pueden faltar (pero no ambos).
 const aEvidencia = (r: EnvioRow): EvidenciaEntrega | null =>
-  r.evidencia_clave
+  r.evidencia_subida_en
     ? {
-        recibidoPor: r.evidencia_recibido_por!,
-        tipo: r.evidencia_tipo!,
-        bytes: r.evidencia_bytes!,
-        subidaEn: r.evidencia_subida_en!,
+        recibidoPor: r.evidencia_recibido_por,
+        tipo: r.evidencia_tipo,
+        bytes: r.evidencia_bytes,
+        subidaEn: r.evidencia_subida_en,
         subidaPor: r.evidencia_subida_por
           ? { id: r.evidencia_subida_por, nombre: r.evidencia_subida_por_nombre ?? "" }
           : null,

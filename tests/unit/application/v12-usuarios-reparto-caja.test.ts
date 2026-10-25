@@ -195,7 +195,7 @@ describe("App del repartidor", () => {
     const entregado = await c.cambiarEstadoRepartidor.ejecutar(REPARTIDOR, e.id, "ENTREGADO");
     expect(entregado).toMatchObject({ estado: "ENTREGADO", porCobrar: 0, entrega: { resultado: "ENTREGADO", operador: "Repartidor Ibarra" } });
     const conFoto = await c.subirEvidenciaRepartidor.ejecutar(REPARTIDOR, e.id, { foto: IMAGENES.jpeg, recibidoPor: "Rosa Vera" });
-    expect(conFoto.evidencia).toEqual({ recibidoPor: "Rosa Vera", subidaEn: clock.ahora().toISOString() });
+    expect(conFoto.evidencia).toEqual({ recibidoPor: "Rosa Vera", conFoto: true, subidaEn: clock.ahora().toISOString() });
 
     expect((await c.listarEnviosRepartidor.ejecutar(REPARTIDOR, "hoy")).map((x) => x.id).sort()).toEqual([e.id, otro.id].sort());
     expect((await c.listarEnviosRepartidor.ejecutar(REPARTIDOR, "pendientes")).map((x) => x.id)).toEqual([otro.id]);

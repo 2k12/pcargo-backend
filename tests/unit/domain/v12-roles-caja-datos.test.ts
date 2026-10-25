@@ -225,7 +225,7 @@ describe("Caja: resumen y cierre", () => {
 describe("Anonimización (LOPDP)", () => {
   it("borra datos personales, notas y evidencia; conserva guía, ítems, costos, estados y fechas", () => {
     const e = entregado();
-    e.registrarEvidencia({ recibidoPor: "Rosa Vera", tipo: "image/jpeg", bytes: 10, clave: "evidencias/e1/a.jpg" }, { ahora: despues(4), actor: REPARTIDOR });
+    e.registrarEvidencia({ recibidoPor: "Rosa Vera", foto: { tipo: "image/jpeg", bytes: 10, clave: "evidencias/e1/a.jpg" } }, { ahora: despues(4), actor: REPARTIDOR });
     const antes = e.toSnapshot();
     const evidencia = e.anonimizar(despues(100));
     expect(evidencia?.clave).toBe("evidencias/e1/a.jpg");
@@ -248,7 +248,7 @@ describe("Anonimización (LOPDP)", () => {
     expect(e.anonimizar(despues(200))).toBeNull();
     expect(e.anonimizadoEn).toEqual(despues(100));
     expect(() =>
-      e.registrarEvidencia({ recibidoPor: "Rosa", tipo: "image/png", bytes: 1, clave: "k" }, { ahora, actor: OPERADOR }),
+      e.registrarEvidencia({ recibidoPor: "Rosa", foto: { tipo: "image/png", bytes: 1, clave: "k" } }, { ahora, actor: OPERADOR }),
     ).toThrow(expect.objectContaining({ code: "ESTADO_INVALIDO" }));
   });
 

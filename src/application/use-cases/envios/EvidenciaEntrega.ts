@@ -1,7 +1,7 @@
 import {
   claveEvidencia,
-  normalizarRecibidoPor,
   validarFotoEvidencia,
+  type FotoEvidencia,
   type TipoImagen,
 } from "../../../domain/envio/Evidencia.js";
 import type { Envio } from "../../../domain/envio/Envio.js";
@@ -13,10 +13,12 @@ import type { EnvioRepository, RutaRepository } from "../../ports/repositories.j
 import type { AlmacenArchivos, Clock, IdGenerator } from "../../ports/services.js";
 import type { EmisorWebhooks } from "../integraciones/EmisorWebhooks.js";
 
+/** v19: por partes; al menos uno de los dos (si no, 400 VALIDACION). Lo que no se envía se conserva. */
 export interface SolicitudEvidencia {
   /** Contenido del archivo subido (`null` si no se adjuntó). */
   foto: Uint8Array | null;
-  recibidoPor: string;
+  /** Nombre de quien recibió (`null`/ausente si no se envió). */
+  recibidoPor?: string | null;
 }
 
 /** Borra sin propagar errores: un archivo huérfano no debe tumbar una operación que ya se completó. */
@@ -29,8 +31,8 @@ export async function eliminarSinFallar(almacen: AlmacenArchivos, clave: string)
 }
 
 /**
- * Sube (o reemplaza) la evidencia de entrega de un envío ENTREGADO: guarda la foto en el almacén privado,
- * sus metadatos en el envío y borra la foto anterior si la había.
+ * Registra o edita la evidencia de entrega de un envío ENTREGADO (v19: por partes). Si viene foto, la guarda en el
+ * almacén privado y borra la anterior; si viene nombre, lo reemplaza. Lo que no se envía se conserva.
  */
 export class SubirEvidencia {
   constructor(
@@ -58,26 +60,28 @@ export class SubirEvidencia {
     if (!envio || (opciones.repartidorId !== undefined && envio.repartidor?.id !== opciones.repartidorId)) {
       throw new DomainError("NO_ENCONTRADO", "Envío no encontrado");
     }
-    const tipo = validarFotoEvidencia(s.foto);
-    const recibidoPor = normalizarRecibidoPor(s.recibidoPor);
-    const foto = s.foto!;
-    const clave = claveEvidencia(envio.id, this.ids.uuid(), tipo);
+    let foto: FotoEvidencia | null = null;
+    if (s.foto !== null) {
+      const tipo = validarFotoEvidencia(s.foto);
+      foto = { tipo, bytes: s.foto.length, clave: claveEvidencia(envio.id, this.ids.uuid(), tipo) };
+    }
 
-    // Valida el estado antes de tocar el almacén: registrarEvidencia lanza ESTADO_INVALIDO si no está ENTREGADO.
+    // Valida datos y estado antes de tocar el almacén: registrarEvidencia lanza VALIDACION/ESTADO_INVALIDO.
     const anterior = envio.registrarEvidencia(
-      { recibidoPor, tipo, bytes: foto.length, clave },
+      { recibidoPor: s.recibidoPor ?? null, foto },
       { ahora: this.clock.ahora(), actor },
     );
     const ruta = (await this.rutas.buscarPorId(envio.rutaId)) ?? undefined;
     const webhooks = (await this.webhooks?.entregasPara(envio, ruta, "envio.evidencia_registrada")) ?? [];
-    await this.almacen.guardar(clave, foto, tipo);
+    if (foto) await this.almacen.guardar(foto.clave, s.foto!, foto.tipo);
     try {
       await this.envios.guardar(envio, { webhooks });
     } catch (e) {
-      await eliminarSinFallar(this.almacen, clave); // sin metadatos la foto nueva quedaría huérfana
+      if (foto) await eliminarSinFallar(this.almacen, foto.clave); // sin metadatos la foto nueva quedaría huérfana
       throw e;
     }
-    if (anterior && anterior.clave !== clave) await eliminarSinFallar(this.almacen, anterior.clave);
+    // Solo se borra la foto anterior si se reemplazó.
+    if (foto && anterior?.clave && anterior.clave !== foto.clave) await eliminarSinFallar(this.almacen, anterior.clave);
     return { envio, ruta };
   }
 }
@@ -98,7 +102,10 @@ export class ObtenerEvidencia {
     const envio = await this.envios.buscarPorId(envioId);
     if (!envio) throw new DomainError("NO_ENCONTRADO", "Envío no encontrado");
     const evidencia = envio.evidencia;
-    if (!evidencia) throw new DomainError("NO_ENCONTRADO", "El envío no tiene evidencia de entrega");
+    // v19: puede haber solo nombre; sin foto → 404.
+    if (!evidencia?.clave || !evidencia.tipo) {
+      throw new DomainError("NO_ENCONTRADO", "El envío no tiene foto de evidencia de entrega");
+    }
     const bytes = await this.almacen.obtener(evidencia.clave);
     if (!bytes) {
       console.error(`Falta en el almacén la evidencia ${evidencia.clave} del envío ${envio.id}`);

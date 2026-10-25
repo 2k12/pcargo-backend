@@ -22,9 +22,10 @@ export interface GestionEntregaDTO extends GestionDTO {
 
 /** Metadatos de la evidencia de entrega. La clave del almacén no se expone. */
 export interface EvidenciaEntregaDTO {
-  recibidoPor: string;
-  tipo: string;
-  bytes: number;
+  /** v19: `null` si aún no se cargó el nombre / la foto. */
+  recibidoPor: string | null;
+  tipo: string | null;
+  bytes: number | null;
   subidaEn: string;
   subidaPor: string | null;
 }

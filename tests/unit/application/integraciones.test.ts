@@ -4,7 +4,7 @@ import type { ContextoApi, NuevoEnvioApi } from "../../../src/application/use-ca
 import type { ResultadoEnvioWebhook } from "../../../src/domain/integracion/Webhook.js";
 import { adaptadoresEnMemoria, crearCasosDeUso, type Adaptadores, type CasosDeUso } from "../../../src/infrastructure/container.js";
 import { CifradorNoConfigurado } from "../../../src/infrastructure/security/cifrado.js";
-import { ADMIN, FakeClock, hasherFalso, JWT_SECRET_TEST, OPERADOR, SecuenciaIds } from "../../helpers/fakes.js";
+import { ADMIN, FakeClock, hasherFalso, IMAGENES, JWT_SECRET_TEST, OPERADOR, SecuenciaIds } from "../../helpers/fakes.js";
 
 /** Cliente de webhooks falso: responde lo que se le indique y guarda lo que "envió". */
 class ClienteWebhookFalso implements ClienteWebhook {
@@ -253,6 +253,22 @@ describe("Webhooks (outbox y despachador)", () => {
     expect(JSON.stringify(cuerpo)).not.toContain(OPERADOR.nombre); // sin nombres de operadores
     expect((await pendientes(ctx)).entregas[0]).toMatchObject({ estado: "ENTREGADO", intentos: 1, ultimoStatus: 200 });
     expect(await c.despacharWebhooks.ejecutar()).toBe(0);
+  });
+
+  it("v19: envio.evidencia_registrada se emite en cada cambio de la evidencia (solo nombre, solo foto)", async () => {
+    const { ctx } = await conWebhook(["envio.evidencia_registrada"]);
+    const envio = await c.crearEnvioApi.ejecutar(ctx, nuevoEnvio());
+    for (const estado of ["EN_TRANSITO", "EN_REPARTO", "ENTREGADO"]) await c.cambiarEstado.ejecutar(OPERADOR, envio.id, estado);
+    expect((await pendientes(ctx)).total).toBe(0); // ENTREGADO sin evidencia no la emite
+    await c.subirEvidencia.ejecutar(OPERADOR, envio.id, { foto: null, recibidoPor: "Rosa Vera" });
+    await c.subirEvidencia.ejecutar(OPERADOR, envio.id, { foto: IMAGENES.png });
+    const lista = await pendientes(ctx);
+    expect(lista.entregas.map((e) => e.evento)).toEqual(["envio.evidencia_registrada", "envio.evidencia_registrada"]);
+    expect(await c.despacharWebhooks.ejecutar()).toBe(2);
+    const cuerpos = webhooks.enviados.map((m) => JSON.parse(m.cuerpo));
+    for (const cuerpo of cuerpos) {
+      expect(cuerpo).toMatchObject({ type: "envio.evidencia_registrada", data: { evidencia: { recibidoPor: "Rosa Vera" } } });
+    }
   });
 
   it("reintenta con espera creciente y tras 8 intentos queda FALLIDO; el reintento manual lo entrega", async () => {

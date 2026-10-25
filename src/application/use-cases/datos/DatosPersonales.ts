@@ -58,7 +58,7 @@ async function anonimizarEnvios(d: DepsDatos, envios: Envio[], ahora: Date): Pro
     await d.envios.guardar(envio);
     if (evidencia) {
       evidencias++;
-      await eliminarSinFallar(d.almacen, evidencia.clave);
+      if (evidencia.clave) await eliminarSinFallar(d.almacen, evidencia.clave); // v19: puede haber solo nombre
     }
   }
   return { envios: envios.length, evidencias };

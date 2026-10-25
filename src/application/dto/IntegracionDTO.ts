@@ -79,7 +79,7 @@ export interface EnvioApiDTO {
   descripcion: string | null;
   seguimientoUrl: string;
   entrega: { resultado: string; fecha: string; nota: string | null } | null;
-  evidencia: { recibidoPor: string; subidaEn: string } | null;
+  evidencia: { recibidoPor: string | null; subidaEn: string } | null;
   creadoEn: string;
   actualizadoEn: string;
   historial?: { estado: string; nota: string | null; fecha: string }[];

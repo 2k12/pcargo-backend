@@ -15,6 +15,12 @@ const evidenciaCorta = (envio: Envio) => {
   return e ? { recibidoPor: e.recibidoPor, subidaEn: e.subidaEn.toISOString() } : null;
 };
 
+/** Para el repartidor también si ya hay foto (v19), para avisarle lo que falta completar. */
+const evidenciaReparto = (envio: Envio) => {
+  const e = envio.evidencia;
+  return e ? { recibidoPor: e.recibidoPor, conFoto: e.tipo !== null, subidaEn: e.subidaEn.toISOString() } : null;
+};
+
 /** Lo que el repartidor debe cobrar al entregar: el costo si es AL_COBRO y aún no se entregó ni canceló. */
 export const porCobrar = (envio: Envio): number =>
   envio.formaPago === "AL_COBRO" && envio.estado !== "ENTREGADO" && envio.estado !== "CANCELADO" ? envio.costo : 0;
@@ -35,7 +41,7 @@ export interface EnvioRepartoDTO {
   costo: number;
   porCobrar: number;
   entrega: GestionEntregaDTO | null;
-  evidencia: { recibidoPor: string; subidaEn: string } | null;
+  evidencia: { recibidoPor: string | null; conFoto: boolean; subidaEn: string } | null;
   asignadoEn: string | null;
   actualizadoEn: string;
 }
@@ -60,7 +66,7 @@ export function toEnvioRepartoDTO(envio: Envio, ruta: Ruta | undefined): EnvioRe
     costo: s.costo,
     porCobrar: porCobrar(envio),
     entrega: entrega && { ...entrega, fecha: entrega.fecha.toISOString() },
-    evidencia: evidenciaCorta(envio),
+    evidencia: evidenciaReparto(envio),
     asignadoEn: envio.asignadoEn?.toISOString() ?? null,
     actualizadoEn: s.actualizadoEn.toISOString(),
   };
@@ -83,7 +89,7 @@ export interface EnvioPortalDTO {
   creadoEn: string;
   actualizadoEn: string;
   entrega: { resultado: string; fecha: string; nota: string | null } | null;
-  evidencia: { recibidoPor: string; subidaEn: string } | null;
+  evidencia: { recibidoPor: string | null; subidaEn: string } | null;
   historial?: { estado: string; nota: string | null; fecha: string; usuario: null }[];
 }
 

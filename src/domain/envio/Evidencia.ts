@@ -1,6 +1,7 @@
 import { DomainError } from "../shared/DomainError.js";
 
 // Evidencia de entrega (contrato v9): foto de la parte de la guía firmada por quien recibe + su nombre.
+// v19: por partes. El nombre y la foto se cargan juntos o por separado; al menos uno existe si hay evidencia.
 
 export const TIPOS_IMAGEN = ["image/jpeg", "image/png", "image/webp"] as const;
 export type TipoImagen = (typeof TIPOS_IMAGEN)[number];
@@ -16,14 +17,24 @@ export const EXTENSION_IMAGEN: Record<TipoImagen, string> = {
 };
 
 export interface EvidenciaEntrega {
-  /** Nombre de quien recibió el envío. */
-  recibidoPor: string;
+  /** Nombre de quien recibió el envío (`null` si aún no se cargó). */
+  recibidoPor: string | null;
+  /** Tipo de la foto (`null` si solo hay nombre). */
+  tipo: TipoImagen | null;
+  /** Tamaño de la foto (`null` si solo hay nombre). */
+  bytes: number | null;
+  /** Última modificación. */
+  subidaEn: Date;
+  /** Operador de la última modificación. */
+  subidaPor: { id: string; nombre: string } | null;
+  /** Clave del archivo en el almacén privado (`null` si solo hay nombre). Nunca sale en la API. */
+  clave: string | null;
+}
+
+/** Foto ya validada y con su clave en el almacén. */
+export interface FotoEvidencia {
   tipo: TipoImagen;
   bytes: number;
-  subidaEn: Date;
-  /** Operador que la subió. */
-  subidaPor: { id: string; nombre: string } | null;
-  /** Clave del archivo en el almacén privado. Nunca sale en la API. */
   clave: string;
 }
 

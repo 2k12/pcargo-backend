@@ -49,7 +49,7 @@ describe("Sin eliminación automática (v13/v14)", () => {
     expect(c).not.toHaveProperty("obtenerPoliticaDatos");
     const e = await crearEnvio({ guardarCliente: true, consentimientoCliente: true });
     await entregar(e.id, true);
-    const claveFoto = (await a.envios.buscarPorId(e.id))!.evidencia!.clave;
+    const claveFoto = (await a.envios.buscarPorId(e.id))!.evidencia!.clave!;
     clock.avanzar(13 * MES_MIN);
     expect(await c.obtenerEnvio.ejecutar(e.id)).toMatchObject({ remitente: { nombre: "María Pérez" }, anonimizadoEn: null });
     expect(await almacen.obtener(claveFoto)).not.toBeNull();
@@ -61,7 +61,7 @@ describe("Solicitudes del titular", () => {
   it("consulta por dígitos del teléfono (remitente, destinatario o cliente) y atiende la eliminación", async () => {
     const terminado = await crearEnvio({ guardarCliente: true, consentimientoCliente: true });
     await entregar(terminado.id, true);
-    const claveFoto = (await a.envios.buscarPorId(terminado.id))!.evidencia!.clave;
+    const claveFoto = (await a.envios.buscarPorId(terminado.id))!.evidencia!.clave!;
     const comoDestinatario = await crearEnvio({
       remitente: { nombre: "Luis", telefono: "0981112222" },
       destinatario: { nombre: "María Pérez", telefono: "099 123 4567", direccion: "Quito" },
@@ -119,6 +119,15 @@ describe("Solicitudes del titular", () => {
     await expect(c.atenderSolicitudDatos.ejecutar(OPERADOR, { telefono: "0991234567", nombreTitular: "X Y", canal: "CORREO" })).rejects.toMatchObject({
       code: "PROHIBIDO",
     });
+  });
+
+  it("v19: anonimiza una evidencia que solo tiene nombre (sin foto que borrar)", async () => {
+    const e = await crearEnvio();
+    await entregar(e.id);
+    await c.subirEvidencia.ejecutar(OPERADOR, e.id, { foto: null, recibidoPor: "Rosa Vera" });
+    const r = await c.atenderSolicitudDatos.ejecutar(ADMIN, { telefono: "0991234567", nombreTitular: "María Pérez", canal: "CORREO" });
+    expect(r.resultado).toMatchObject({ envios: 1, evidencias: 1 });
+    expect((await c.obtenerEnvio.ejecutar(e.id)).evidencia).toBeNull();
   });
 });
 

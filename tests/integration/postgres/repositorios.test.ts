@@ -209,7 +209,7 @@ describe.skipIf(!url)("PostgreSQL", () => {
     expect(e.toSnapshot().remitente.direccion).toBeNull();
     expect(e.evidencia).toBeNull();
     await expect(db.query("UPDATE envios SET remitente_direccion = repeat('x', 201) WHERE id = $1", [id])).rejects.toMatchObject({ code: "23514" });
-    // evidencia a medias (sin clave) o con un tipo no permitido
+    // evidencia sin fecha (v19: el nombre solo sí vale, con fecha) o con un tipo no permitido
     await expect(db.query("UPDATE envios SET evidencia_recibido_por = 'Rosa' WHERE id = $1", [id])).rejects.toMatchObject({ code: "23514" });
     await expect(
       db.query(
@@ -217,6 +217,32 @@ describe.skipIf(!url)("PostgreSQL", () => {
            evidencia_subida_en = now(), evidencia_clave = 'k' WHERE id = $1`,
         [id],
       ),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("migración 016: evidencia por partes (solo nombre o solo foto), pero nunca vacía ni con la foto a medias", async () => {
+    await db.query("TRUNCATE envios, envio_items, historial_estados CASCADE");
+    const id = "00000000-0000-4000-d000-000000000016";
+    await db.query(
+      `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,
+         destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, costo, forma_pago)
+       VALUES ($1, 16, 'Ana', '0991234567', 'Luis', '0987654321', 'Quito', 11, 1, 1, 3, 'PAGADO')`,
+      [id],
+    );
+    const actualizar = (set: string) => db.query(`UPDATE envios SET ${set} WHERE id = $1`, [id]);
+    // solo nombre
+    await actualizar("evidencia_recibido_por = 'Rosa', evidencia_subida_en = now()");
+    // solo foto
+    await actualizar(
+      "evidencia_recibido_por = NULL, evidencia_clave = 'k', evidencia_tipo = 'image/png', evidencia_bytes = 5, evidencia_subida_en = now()",
+    );
+    expect((await new PgEnvioRepository(db).buscarPorNumeroGuia(16))!.evidencia).toMatchObject({ recibidoPor: null, clave: "k" });
+    // vacía (con fecha pero sin nombre ni foto), foto a medias o nombre sin fecha
+    await expect(actualizar("evidencia_clave = NULL, evidencia_tipo = NULL, evidencia_bytes = NULL")).rejects.toMatchObject({ code: "23514" });
+    await expect(actualizar("evidencia_tipo = NULL")).rejects.toMatchObject({ code: "23514" });
+    await expect(actualizar("evidencia_bytes = 0")).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      actualizar("evidencia_clave = NULL, evidencia_tipo = NULL, evidencia_bytes = NULL, evidencia_recibido_por = 'Rosa', evidencia_subida_en = NULL"),
     ).rejects.toMatchObject({ code: "23514" });
   });
 });

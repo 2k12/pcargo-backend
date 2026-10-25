@@ -13,7 +13,7 @@ import {
   type EstadoEnvio,
   type ResultadoEntrega,
 } from "./EstadoEnvio.js";
-import { normalizarRecibidoPor, type EvidenciaEntrega, type TipoImagen } from "./Evidencia.js";
+import { normalizarRecibidoPor, type EvidenciaEntrega, type FotoEvidencia } from "./Evidencia.js";
 import type { FormaPago } from "./FormaPago.js";
 
 export interface Contacto {
@@ -326,14 +326,20 @@ export class Envio {
   }
 
   /**
-   * Registra (o reemplaza) la evidencia de entrega. Solo se admite en ENTREGADO.
-   * Devuelve la evidencia anterior, cuya foto debe borrarse del almacén.
+   * Registra o edita la evidencia de entrega por partes (v19): `recibidoPor`, `foto` o ambos (al menos uno).
+   * Lo que no se envía se conserva. Solo se admite en ENTREGADO.
+   * Devuelve la evidencia anterior (si se reemplazó la foto, la anterior debe borrarse del almacén).
    */
   registrarEvidencia(
-    datos: { recibidoPor: string; tipo: TipoImagen; bytes: number; clave: string },
+    datos: { recibidoPor?: string | null; foto?: FotoEvidencia | null },
     ctx: { ahora: Date; actor: Actor },
   ): EvidenciaEntrega | null {
-    const recibidoPor = normalizarRecibidoPor(datos.recibidoPor);
+    const tieneNombre = datos.recibidoPor !== undefined && datos.recibidoPor !== null;
+    const foto = datos.foto ?? null;
+    if (!tieneNombre && !foto) {
+      throw new DomainError("VALIDACION", "Debe enviar la foto de la guía firmada, el nombre de quien recibió o ambos");
+    }
+    const recibidoPor = tieneNombre ? normalizarRecibidoPor(datos.recibidoPor) : null;
     if (this.props.anonimizadoEn) {
       throw new DomainError("ESTADO_INVALIDO", "Los datos personales de este envío ya se eliminaron");
     }
@@ -345,15 +351,15 @@ export class Envio {
     }
     const anterior = this.props.evidencia ?? null;
     this.props.evidencia = {
-      recibidoPor,
-      tipo: datos.tipo,
-      bytes: datos.bytes,
-      clave: datos.clave,
+      recibidoPor: recibidoPor ?? anterior?.recibidoPor ?? null,
+      tipo: foto ? foto.tipo : (anterior?.tipo ?? null),
+      bytes: foto ? foto.bytes : (anterior?.bytes ?? null),
+      clave: foto ? foto.clave : (anterior?.clave ?? null),
       subidaEn: ctx.ahora,
       subidaPor: { id: ctx.actor.id, nombre: ctx.actor.nombre },
     };
     this.props.actualizadoEn = ctx.ahora;
-    return anterior;
+    return anterior ? { ...anterior } : null;
   }
 
   /** Canal por el que ingresó: PANEL o API (+ integración). */

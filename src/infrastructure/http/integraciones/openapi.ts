@@ -167,7 +167,7 @@ const envioApi = {
     evidencia: {
       type: ["object", "null"],
       required: ["recibidoPor", "subidaEn"],
-      properties: { recibidoPor: { type: "string" }, subidaEn: { type: "string", format: "date-time" } },
+      properties: { recibidoPor: { type: ["string", "null"] }, subidaEn: { type: "string", format: "date-time" } },
     },
     creadoEn: { type: "string", format: "date-time" },
     actualizadoEn: { type: "string", format: "date-time" },

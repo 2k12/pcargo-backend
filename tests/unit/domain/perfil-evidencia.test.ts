@@ -113,7 +113,7 @@ describe("Evidencia de entrega", () => {
 
   it("solo se registra en ENTREGADO → si no, ESTADO_INVALIDO", () => {
     const e = crear();
-    const ev = { recibidoPor: "Rosa", tipo: "image/png" as const, bytes: 10, clave: "evidencias/e1/a.png" };
+    const ev = { recibidoPor: "Rosa", foto: { tipo: "image/png" as const, bytes: 10, clave: "evidencias/e1/a.png" } };
     expect(() => e.registrarEvidencia(ev, { ahora, actor: OPERADOR })).toThrowError(
       expect.objectContaining({ code: "ESTADO_INVALIDO" }),
     );
@@ -128,7 +128,7 @@ describe("Evidencia de entrega", () => {
     const e = entregado();
     expect(e.evidencia).toBeNull();
     const primera = e.registrarEvidencia(
-      { recibidoPor: " Rosa  Cevallos ", tipo: "image/png", bytes: 10, clave: "evidencias/e1/a.png" },
+      { recibidoPor: " Rosa  Cevallos ", foto: { tipo: "image/png", bytes: 10, clave: "evidencias/e1/a.png" } },
       { ahora: despues(10), actor: OPERADOR },
     );
     expect(primera).toBeNull();
@@ -143,7 +143,7 @@ describe("Evidencia de entrega", () => {
     expect(e.toSnapshot().actualizadoEn).toEqual(despues(10));
 
     const anterior = e.registrarEvidencia(
-      { recibidoPor: "Luis", tipo: "image/jpeg", bytes: 20, clave: "evidencias/e1/b.jpg" },
+      { recibidoPor: "Luis", foto: { tipo: "image/jpeg", bytes: 20, clave: "evidencias/e1/b.jpg" } },
       { ahora: despues(20), actor: ADMIN },
     );
     expect(anterior?.clave).toBe("evidencias/e1/a.png");
@@ -158,7 +158,73 @@ describe("Evidencia de entrega", () => {
   it("valida el nombre de quien recibe antes que el estado", () => {
     const e = crear();
     expect(() =>
-      e.registrarEvidencia({ recibidoPor: "R", tipo: "image/png", bytes: 1, clave: "k" }, { ahora, actor: OPERADOR }),
+      e.registrarEvidencia({ recibidoPor: "R", foto: { tipo: "image/png", bytes: 1, clave: "k" } }, { ahora, actor: OPERADOR }),
     ).toThrowError(expect.objectContaining({ code: "VALIDACION" }));
+  });
+});
+
+describe("Evidencia de entrega por partes (v19)", () => {
+  const foto = (clave: string) => ({ tipo: "image/jpeg" as const, bytes: 10, clave });
+
+  it("marcar ENTREGADO no exige nombre ni foto", () => {
+    const e = entregado();
+    expect(e.estado).toBe("ENTREGADO");
+    expect(e.evidencia).toBeNull();
+  });
+
+  it("solo nombre: guarda el nombre sin foto; luego solo foto conserva el nombre", () => {
+    const e = entregado();
+    expect(e.registrarEvidencia({ recibidoPor: " Rosa  Vera " }, { ahora: despues(10), actor: OPERADOR })).toBeNull();
+    expect(e.evidencia).toEqual({
+      recibidoPor: "Rosa Vera",
+      tipo: null,
+      bytes: null,
+      clave: null,
+      subidaEn: despues(10),
+      subidaPor: { id: OPERADOR.id, nombre: OPERADOR.nombre },
+    });
+    const anterior = e.registrarEvidencia({ foto: foto("evidencias/e1/a.jpg") }, { ahora: despues(20), actor: ADMIN });
+    expect(anterior?.clave).toBeNull();
+    expect(e.evidencia).toEqual({
+      recibidoPor: "Rosa Vera",
+      tipo: "image/jpeg",
+      bytes: 10,
+      clave: "evidencias/e1/a.jpg",
+      subidaEn: despues(20),
+      subidaPor: { id: ADMIN.id, nombre: ADMIN.nombre },
+    });
+  });
+
+  it("solo foto: nombre null; luego solo nombre conserva la foto", () => {
+    const e = entregado();
+    e.registrarEvidencia({ foto: foto("evidencias/e1/a.jpg") }, { ahora: despues(10), actor: OPERADOR });
+    expect(e.evidencia).toMatchObject({ recibidoPor: null, clave: "evidencias/e1/a.jpg" });
+    const anterior = e.registrarEvidencia({ recibidoPor: "Luis" }, { ahora: despues(20), actor: OPERADOR });
+    expect(anterior?.clave).toBe("evidencias/e1/a.jpg");
+    expect(e.evidencia).toMatchObject({ recibidoPor: "Luis", tipo: "image/jpeg", bytes: 10, clave: "evidencias/e1/a.jpg", subidaEn: despues(20) });
+  });
+
+  it("ninguno de los dos → VALIDACION (antes que el estado) y no cambia nada", () => {
+    const e = entregado();
+    for (const d of [{}, { recibidoPor: null, foto: null }]) {
+      expect(() => e.registrarEvidencia(d, { ahora, actor: OPERADOR })).toThrowError(expect.objectContaining({ code: "VALIDACION" }));
+    }
+    expect(() => crear().registrarEvidencia({}, { ahora, actor: OPERADOR })).toThrowError(
+      expect.objectContaining({ code: "VALIDACION" }),
+    );
+    expect(e.evidencia).toBeNull();
+  });
+
+  it("solo nombre en un envío no ENTREGADO → ESTADO_INVALIDO", () => {
+    expect(() => crear().registrarEvidencia({ recibidoPor: "Rosa" }, { ahora, actor: OPERADOR })).toThrowError(
+      expect.objectContaining({ code: "ESTADO_INVALIDO" }),
+    );
+  });
+
+  it("anonimizar una evidencia solo con nombre la elimina (sin foto que borrar)", () => {
+    const e = entregado();
+    e.registrarEvidencia({ recibidoPor: "Rosa" }, { ahora: despues(10), actor: OPERADOR });
+    expect(e.anonimizar(despues(100))).toMatchObject({ recibidoPor: "Rosa", clave: null });
+    expect(e.evidencia).toBeNull();
   });
 });

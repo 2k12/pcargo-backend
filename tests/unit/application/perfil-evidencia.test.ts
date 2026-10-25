@@ -149,10 +149,11 @@ describe("SubirEvidencia / ObtenerEvidencia", () => {
     expect((await c.obtenerEnvio.ejecutar(e.id)).evidencia).toBeNull();
   });
 
-  it("sin foto, foto que no es imagen, pesada o nombre inválido → VALIDACION; envío inexistente → NO_ENCONTRADO", async () => {
+  it("ni foto ni nombre, foto que no es imagen, pesada o nombre inválido → VALIDACION; envío inexistente → NO_ENCONTRADO", async () => {
     const e = await envioEntregado();
     const casos = [
-      { foto: null, recibidoPor: "Rosa" },
+      { foto: null },
+      { foto: null, recibidoPor: null },
       { foto: IMAGENES.falsa, recibidoPor: "Rosa" },
       { foto: Buffer.concat([IMAGENES.jpeg, Buffer.alloc(5 * 1024 * 1024)]), recibidoPor: "Rosa" },
       { foto: IMAGENES.png, recibidoPor: "R" },
@@ -204,5 +205,58 @@ describe("SubirEvidencia / ObtenerEvidencia", () => {
     const s = await c.seguimiento.ejecutar(String(e.numeroGuia));
     expect(s).not.toHaveProperty("evidencia");
     expect(JSON.stringify(s)).not.toContain("Rosa");
+  });
+});
+
+describe("SubirEvidencia por partes (v19)", () => {
+  it("solo nombre: no toca el almacén; GET de la foto → NO_ENCONTRADO", async () => {
+    const e = await envioEntregado();
+    const r = await c.subirEvidencia.ejecutar(OPERADOR, e.id, { foto: null, recibidoPor: "Rosa Vera" });
+    expect(r.evidencia).toEqual({
+      recibidoPor: "Rosa Vera",
+      tipo: null,
+      bytes: null,
+      subidaEn: clock.ahora().toISOString(),
+      subidaPor: OPERADOR.nombre,
+    });
+    expect(almacen.claves()).toEqual([]);
+    await expect(c.obtenerEvidencia.ejecutar(e.id)).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+  });
+
+  it("solo foto conserva el nombre; solo nombre conserva la foto; subidaEn/subidaPor = última modificación", async () => {
+    const e = await envioEntregado();
+    await c.subirEvidencia.ejecutar(OPERADOR, e.id, { foto: null, recibidoPor: "Rosa Vera" });
+    clock.avanzar(5);
+    const conFoto = await c.subirEvidencia.ejecutar(ADMIN, e.id, { foto: IMAGENES.png });
+    expect(conFoto.evidencia).toEqual({
+      recibidoPor: "Rosa Vera",
+      tipo: "image/png",
+      bytes: IMAGENES.png.length,
+      subidaEn: clock.ahora().toISOString(),
+      subidaPor: ADMIN.nombre,
+    });
+    const [clave] = almacen.claves();
+    clock.avanzar(5);
+    const conNombre = await c.subirEvidencia.ejecutar(OPERADOR, e.id, { foto: null, recibidoPor: "Luis Andrade" });
+    expect(conNombre.evidencia).toMatchObject({ recibidoPor: "Luis Andrade", tipo: "image/png", subidaEn: clock.ahora().toISOString(), subidaPor: OPERADOR.nombre });
+    expect(almacen.claves()).toEqual([clave]); // la foto sigue
+    expect((await c.obtenerEvidencia.ejecutar(e.id)).tipo).toBe("image/png");
+  });
+
+  it("solo foto sobre otra foto: reemplaza y borra la anterior, conserva el nombre", async () => {
+    const e = await envioEntregado();
+    await c.subirEvidencia.ejecutar(OPERADOR, e.id, { foto: IMAGENES.jpeg, recibidoPor: "Rosa" });
+    const [primera] = almacen.claves();
+    const r = await c.subirEvidencia.ejecutar(OPERADOR, e.id, { foto: IMAGENES.webp });
+    expect(r.evidencia).toMatchObject({ recibidoPor: "Rosa", tipo: "image/webp" });
+    expect(almacen.claves()).toHaveLength(1);
+    expect(almacen.claves()[0]).not.toBe(primera);
+  });
+
+  it("solo nombre en un envío no ENTREGADO → ESTADO_INVALIDO", async () => {
+    const e = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
+    await expect(c.subirEvidencia.ejecutar(OPERADOR, e.id, { foto: null, recibidoPor: "Rosa" })).rejects.toMatchObject({
+      code: "ESTADO_INVALIDO",
+    });
   });
 });

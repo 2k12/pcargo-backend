@@ -221,7 +221,7 @@ describe("Asignación y app del repartidor (v12)", () => {
       .attach("foto", IMAGENES.png, { filename: "guia.png", contentType: "image/png" })
       .expect(200);
     expect(foto.body.evidencia).toMatchObject({ recibidoPor: "Rosa Vera" });
-    expect(Object.keys(foto.body.evidencia).sort()).toEqual(["recibidoPor", "subidaEn"]);
+    expect(Object.keys(foto.body.evidencia).sort()).toEqual(["conFoto", "recibidoPor", "subidaEn"]);
     expect((await request(app).get(`/api/envios/${e.id}/evidencia`).set(auth(tokenOperador)).expect(200)).headers["content-type"]).toBe("image/png");
 
     expect((await request(app).get("/api/repartidor/envios?vista=hoy").set(auth(tokenRepartidor)).expect(200)).body.map((x: { id: string }) => x.id)).toEqual([e.id]);

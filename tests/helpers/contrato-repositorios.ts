@@ -389,7 +389,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       }
       const subidaEn = new Date(Date.UTC(2026, 9, 1, 17));
       const clave1 = `evidencias/${e.id}/a.jpg`;
-      e.registrarEvidencia({ recibidoPor: "Rosa Cevallos", tipo: "image/jpeg", bytes: 1234, clave: clave1 }, { ahora: subidaEn, actor: OPERADOR });
+      e.registrarEvidencia({ recibidoPor: "Rosa Cevallos", foto: { tipo: "image/jpeg", bytes: 1234, clave: clave1 } }, { ahora: subidaEn, actor: OPERADOR });
       await repos.envios.guardar(e);
       const leido = (await repos.envios.buscarPorId(e.id))!;
       expect(leido.evidencia).toEqual({
@@ -404,7 +404,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(leido.historial).toHaveLength(4);
 
       const clave2 = `evidencias/${e.id}/b.webp`;
-      leido.registrarEvidencia({ recibidoPor: "Luis", tipo: "image/webp", bytes: 99, clave: clave2 }, { ahora: new Date(Date.UTC(2026, 9, 1, 18)), actor: ADMIN });
+      leido.registrarEvidencia({ recibidoPor: "Luis", foto: { tipo: "image/webp", bytes: 99, clave: clave2 } }, { ahora: new Date(Date.UTC(2026, 9, 1, 18)), actor: ADMIN });
       await repos.envios.guardar(leido);
       const pagina = await repos.envios.listarPagina({ estado: "ENTREGADO" }, { pagina: 1, porPagina: 10 });
       expect(pagina.envios.find((x) => x.id === e.id)?.evidencia).toMatchObject({
@@ -415,6 +415,45 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
         clave: clave2,
       });
       expect((await repos.envios.buscarPorId(e.id))?.historial).toHaveLength(4);
+    });
+
+    it("v19: guarda la evidencia por partes (solo nombre, luego foto conservando el nombre, luego otro nombre)", async () => {
+      const e = nuevoEnvio(4);
+      for (const [i, estado] of (["EN_TRANSITO", "EN_REPARTO", "ENTREGADO"] as const).entries()) {
+        e.cambiarEstado(estado, { ahora: new Date(Date.UTC(2026, 9, 2, 13 + i)), actor: OPERADOR });
+      }
+      await repos.envios.guardar(e);
+      const t1 = new Date(Date.UTC(2026, 9, 2, 17));
+      e.registrarEvidencia({ recibidoPor: "Rosa Vera" }, { ahora: t1, actor: OPERADOR });
+      await repos.envios.guardar(e);
+      const soloNombre = (await repos.envios.buscarPorId(e.id))!;
+      expect(soloNombre.evidencia).toEqual({
+        recibidoPor: "Rosa Vera",
+        tipo: null,
+        bytes: null,
+        clave: null,
+        subidaEn: t1,
+        subidaPor: { id: OPERADOR.id, nombre: OPERADOR.nombre },
+      });
+
+      const clave = `evidencias/${e.id}/c.png`;
+      soloNombre.registrarEvidencia({ foto: { tipo: "image/png", bytes: 55, clave } }, { ahora: new Date(Date.UTC(2026, 9, 2, 18)), actor: ADMIN });
+      await repos.envios.guardar(soloNombre);
+      const conFoto = (await repos.envios.buscarPorId(e.id))!;
+      expect(conFoto.evidencia).toMatchObject({ recibidoPor: "Rosa Vera", tipo: "image/png", bytes: 55, clave, subidaPor: { id: ADMIN.id } });
+
+      conFoto.registrarEvidencia({ recibidoPor: "Luis" }, { ahora: new Date(Date.UTC(2026, 9, 2, 19)), actor: OPERADOR });
+      await repos.envios.guardar(conFoto);
+      expect((await repos.envios.buscarPorId(e.id))!.evidencia).toMatchObject({ recibidoPor: "Luis", tipo: "image/png", bytes: 55, clave });
+
+      // solo foto, sin nombre
+      const f = nuevoEnvio(5);
+      for (const [i, estado] of (["EN_TRANSITO", "EN_REPARTO", "ENTREGADO"] as const).entries()) {
+        f.cambiarEstado(estado, { ahora: new Date(Date.UTC(2026, 9, 2, 13 + i)), actor: OPERADOR });
+      }
+      f.registrarEvidencia({ foto: { tipo: "image/jpeg", bytes: 7, clave: `evidencias/${f.id}/d.jpg` } }, { ahora: t1, actor: OPERADOR });
+      await repos.envios.guardar(f);
+      expect((await repos.envios.buscarPorId(f.id))!.evidencia).toMatchObject({ recibidoPor: null, tipo: "image/jpeg", bytes: 7 });
     });
 
     it("usuarios: busca credenciales por id, detecta correos repetidos y actualiza perfil y contraseña", async () => {

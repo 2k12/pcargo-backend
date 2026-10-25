@@ -53,12 +53,20 @@ export const cambiarContrasenaSchema = z.object({
   nueva: z.string().max(200),
 });
 
+/**
+ * v19: `recibidoPor` es opcional (la foto también); que venga al menos uno lo valida el dominio.
+ * Un campo vacío del formulario cuenta como no enviado.
+ */
 export const evidenciaSchema = z.object({
-  recibidoPor: z
-    .string({ error: "obligatorio" })
-    .trim()
-    .min(RECIBIDO_POR.min, `mínimo ${RECIBIDO_POR.min} caracteres`)
-    .max(RECIBIDO_POR.max, `máximo ${RECIBIDO_POR.max} caracteres`),
+  recibidoPor: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z
+      .string({ error: "debe ser texto" })
+      .trim()
+      .min(RECIBIDO_POR.min, `mínimo ${RECIBIDO_POR.min} caracteres`)
+      .max(RECIBIDO_POR.max, `máximo ${RECIBIDO_POR.max} caracteres`)
+      .optional(),
+  ),
 });
 
 /**

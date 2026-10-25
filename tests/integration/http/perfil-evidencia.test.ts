@@ -255,9 +255,10 @@ describe("Evidencia de entrega", () => {
   });
 
   it.each([
-    ["sin foto", null, "Rosa"],
+    ["ni foto ni recibidoPor (v19)", null, undefined],
+    ["recibidoPor vacío y sin foto (v19)", null, "   "],
     ["archivo que no es imagen", IMAGENES.falsa, "Rosa"],
-    ["sin recibidoPor", IMAGENES.jpeg, undefined],
+    ["solo nombre pero corto", null, "R"],
     ["recibidoPor corto", IMAGENES.jpeg, "R"],
     ["recibidoPor largo", IMAGENES.jpeg, "x".repeat(121)],
   ])("%s → 400 VALIDACION", async (_caso, foto, recibidoPor) => {
@@ -274,7 +275,7 @@ describe("Evidencia de entrega", () => {
     expect(r.body).toEqual({ error: { code: "VALIDACION", message: expect.stringContaining("5 MB") } });
   });
 
-  it("campo de archivo con otro nombre → 400; JSON sin archivo → 400", async () => {
+  it("campo de archivo con otro nombre → 400; JSON vacío → 400", async () => {
     const e = await envioEntregado();
     const r = await request(app)
       .post(`/api/envios/${e.id}/evidencia`)
@@ -283,7 +284,7 @@ describe("Evidencia de entrega", () => {
       .attach("imagen", IMAGENES.jpeg, "guia.jpg")
       .expect(400);
     expect(r.body.error.code).toBe("VALIDACION");
-    await request(app).post(`/api/envios/${e.id}/evidencia`).set(auth(tokenOperador)).send({ recibidoPor: "Rosa" }).expect(400);
+    await request(app).post(`/api/envios/${e.id}/evidencia`).set(auth(tokenOperador)).send({}).expect(400);
   });
 
   it("multipart mal formado → 400 VALIDACION", async () => {
