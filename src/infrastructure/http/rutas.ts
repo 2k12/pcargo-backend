@@ -50,6 +50,9 @@ import {
   solicitudDatosSchema,
   titularSchema,
   vistaRepartidorSchema,
+  anularGuiaTalonarioSchema,
+  crearTalonarioSchema,
+  filtroTalonariosSchema,
 } from "./esquemas.js";
 import { DomainError } from "../../domain/shared/DomainError.js";
 import { ROLES_PANEL } from "../../domain/usuario/Usuario.js";
@@ -420,6 +423,29 @@ export function crearRouter(c: CasosDeUso, opciones: OpcionesRouter = {}): Route
 
   panel.get("/caja/cierres/:id", async (req, res) => {
     res.json(await c.obtenerCierreCaja.ejecutar(idUuid.parse(req.params.id)));
+  });
+
+  // ── Talonarios de guías en blanco (v20, ADMIN u OPERADOR) ──
+  panel.post("/talonarios", async (req, res) => {
+    res.status(201).json(await c.crearTalonario.ejecutar(actorDe(res), crearTalonarioSchema.parse(req.body)));
+  });
+
+  panel.get("/talonarios", async (req, res) => {
+    res.json(await c.listarTalonarios.ejecutar(filtroTalonariosSchema.parse(req.query), paginacionSchema.parse(req.query)));
+  });
+
+  // Antes de /talonarios/:id: escaneo del panel cuando el número aún no es un envío (acepta ceros a la izquierda).
+  panel.get("/talonarios/guia/:numeroGuia", async (req, res) => {
+    res.json(await c.obtenerGuiaTalonario.ejecutar(req.params.numeroGuia));
+  });
+
+  panel.get("/talonarios/:id", async (req, res) => {
+    res.json(await c.obtenerTalonario.ejecutar(idUuid.parse(req.params.id)));
+  });
+
+  panel.post("/talonarios/:id/anular", async (req, res) => {
+    const id = idUuid.parse(req.params.id);
+    res.json(await c.anularGuiaTalonario.ejecutar(id, anularGuiaTalonarioSchema.parse(req.body)));
   });
 
   // ── Datos personales (LOPDP, solo ADMIN; v13: sin depuración automática) ──

@@ -18,6 +18,7 @@ import type {
   ClienteRepository,
   EnvioRepository,
   RutaRepository,
+  TalonarioRepository,
   TipoCargaRepository,
   UsuarioRepository,
 } from "../application/ports/repositories.js";
@@ -142,6 +143,13 @@ import { EmisorWebhooks } from "../application/use-cases/integraciones/EmisorWeb
 import { EjecutarIdempotente } from "../application/use-cases/integraciones/Idempotencia.js";
 import { DespacharWebhooks, PurgarRegistrosApi } from "../application/use-cases/integraciones/Webhooks.js";
 import { ActualizarRuta, CrearRuta, ListarRutas } from "../application/use-cases/rutas/Rutas.js";
+import {
+  AnularGuiaTalonario,
+  CrearTalonario,
+  ListarTalonarios,
+  ObtenerGuiaTalonario,
+  ObtenerTalonario,
+} from "../application/use-cases/talonarios/Talonarios.js";
 import { MemoryCache, MemoryLimitadorTasa, SinCache } from "./cache/memoria.js";
 import {
   claveCatalogo,
@@ -166,7 +174,9 @@ import {
 import { InMemoryClienteRepository } from "./persistence/memory/InMemoryClienteRepository.js";
 import { InMemoryCajaRepository } from "./persistence/memory/InMemoryCaja.js";
 import { InMemoryDatosPersonalesRepository } from "./persistence/memory/InMemoryDatosPersonales.js";
+import { InMemoryTalonarioRepository } from "./persistence/memory/InMemoryTalonarios.js";
 import { PgCajaRepository } from "./persistence/postgres/PgCaja.js";
+import { PgTalonarioRepository } from "./persistence/postgres/PgTalonarios.js";
 import { PgDatosPersonalesRepository } from "./persistence/postgres/PgDatosPersonales.js";
 import {
   InMemoryEntregaWebhookRepository,
@@ -238,6 +248,8 @@ export interface Adaptadores {
   contrasenas: GeneradorContrasenas;
   /** v17: huella del código único de acceso. */
   huellasCodigo: HuellaCodigoAcceso;
+  /** v20: talonarios de guías en blanco. */
+  talonarios: TalonarioRepository;
 }
 
 export interface OpcionesCasos {
@@ -267,7 +279,8 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
   // Webhooks de los envíos de empresas: se encolan en la misma transacción que el cambio del envío (outbox).
   const emisor = new EmisorWebhooks(a.integraciones, a.ids, a.clock, publicUrl);
   // Un solo CrearEnvio (misma tarifa y reglas) para el panel y la API de empresas.
-  const crearEnvioBase = new CrearEnvio(a.envios, cotizar, a.ids, a.clock, a.clientes, emisor);
+  // v20: el panel, la API de empresas y el portal comparten el consecutivo, que salta los números de talonarios.
+  const crearEnvioBase = new CrearEnvio(a.envios, cotizar, a.ids, a.clock, a.clientes, emisor, a.talonarios);
   const crearEnvioApi = new CrearEnvioApi(crearEnvioBase, a.envios, rutas, publicUrl);
   const deps = {
     integraciones: a.integraciones,
@@ -448,6 +461,13 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     obtenerEnvioPortal: new ObtenerEnvioPortal(a.envios, rutas),
     crearEnvioPortal: invalidaTras(new CrearEnvioPortal(crearEnvioBase, a.clientes), cache, [ESPACIOS.dashboard]),
 
+    // ── Talonarios de guías en blanco (v20, ADMIN u OPERADOR). Las guías en blanco no son envíos: no tocan cachés.
+    crearTalonario: new CrearTalonario(a.talonarios, a.ids, a.clock),
+    listarTalonarios: new ListarTalonarios(a.talonarios),
+    obtenerTalonario: new ObtenerTalonario(a.talonarios),
+    obtenerGuiaTalonario: new ObtenerGuiaTalonario(a.talonarios),
+    anularGuiaTalonario: new AnularGuiaTalonario(a.talonarios, a.clock),
+
     // ── Tareas de fondo: solo las ejecuta el despachador de main.ts (o un test, de forma explícita).
     despacharWebhooks: new DespacharWebhooks(depsEntrega),
     purgarRegistrosApi: new PurgarRegistrosApi(a.solicitudesApi, a.idempotencia, a.clock),
@@ -489,11 +509,14 @@ export async function adaptadoresEnMemoria(
   });
   // Caja: el repo de envíos registra los cobros al guardar (como la transacción de Postgres).
   const caja = new InMemoryCajaRepository(usuarios.nombre);
+  // Talonarios (v20): comparten el consecutivo con los envíos y la guía pasa a USADA al guardar el envío.
+  const talonarios = new InMemoryTalonarioRepository(() => envios.maximoNumeroGuia());
   const envios = new InMemoryEnvioRepository({
     outbox: entregasWebhook,
     nombreIntegracion: integraciones.nombre,
     caja,
     nombreUsuario: usuarios.nombre,
+    talonarios,
   });
   return {
     usuarios,
@@ -523,6 +546,7 @@ export async function adaptadoresEnMemoria(
     datosPersonales: new InMemoryDatosPersonalesRepository(),
     contrasenas: new GeneradorContrasenasCrypto(),
     huellasCodigo: new HuellaCodigoHmac(jwtSecret),
+    talonarios,
     ...sobrescribir,
   };
 }
@@ -558,6 +582,7 @@ export function adaptadoresPostgres(
     datosPersonales: new PgDatosPersonalesRepository(db),
     contrasenas: new GeneradorContrasenasCrypto(),
     huellasCodigo: new HuellaCodigoHmac(config.JWT_SECRET),
+    talonarios: new PgTalonarioRepository(db),
   };
 }
 

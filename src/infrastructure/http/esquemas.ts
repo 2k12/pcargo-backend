@@ -367,6 +367,22 @@ export const filtroCierresSchema = z.object({
   hasta: z.string().optional(),
 });
 
+// ── Talonarios de guías en blanco (v20) ──
+export const crearTalonarioSchema = z.strictObject({
+  cantidad: z.number("la cantidad debe ser un número").int("la cantidad debe ser un entero").min(1).max(50),
+  nota: z.string().trim().max(120).nullish(),
+});
+
+export const filtroTalonariosSchema = z.object({
+  estado: z.enum(["abiertos", "todos"]).default("abiertos"),
+});
+
+export const anularGuiaTalonarioSchema = z.strictObject({
+  // texto (admite ceros a la izquierda) o número; el dominio valida el formato
+  numeroGuia: z.union([z.string().max(40), z.number()]),
+  motivo: z.string().trim().min(3, "mínimo 3 caracteres").max(200, "máximo 200 caracteres"),
+});
+
 export const titularSchema = z.object({ telefono: z.string().min(1, "obligatorio").max(40) });
 
 export const solicitudDatosSchema = z.strictObject({

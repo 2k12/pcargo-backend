@@ -24,6 +24,11 @@ import { InMemoryCajaRepository } from "../../../src/infrastructure/persistence/
 import { InMemoryDatosPersonalesRepository } from "../../../src/infrastructure/persistence/memory/InMemoryDatosPersonales.js";
 import { PgCajaRepository } from "../../../src/infrastructure/persistence/postgres/PgCaja.js";
 import { PgDatosPersonalesRepository } from "../../../src/infrastructure/persistence/postgres/PgDatosPersonales.js";
+import { InMemoryTalonarioRepository } from "../../../src/infrastructure/persistence/memory/InMemoryTalonarios.js";
+import { PgTalonarioRepository } from "../../../src/infrastructure/persistence/postgres/PgTalonarios.js";
+import { Talonario } from "../../../src/domain/talonario/Talonario.js";
+import { Envio } from "../../../src/domain/envio/Envio.js";
+import { OPERADOR, solicitudEnvio } from "../../helpers/fakes.js";
 import {
   InMemoryEntregaWebhookRepository,
   InMemoryIdempotenciaRepository,
@@ -52,11 +57,13 @@ contratoRepositorios("memoria", async () => {
     USUARIOS_SEED.map(({ password, ...u }) => ({ ...u, clienteId: null, passwordHash: `hash:${password}`, activo: true })),
   );
   const caja = new InMemoryCajaRepository(usuarios.nombre);
+  const talonarios = new InMemoryTalonarioRepository(() => envios.maximoNumeroGuia());
   const envios = new InMemoryEnvioRepository({
     outbox: entregasWebhook,
     nombreIntegracion: integraciones.nombre,
     caja,
     nombreUsuario: usuarios.nombre,
+    talonarios,
   });
   return {
     integraciones,
@@ -72,6 +79,7 @@ contratoRepositorios("memoria", async () => {
     usuarios,
     caja,
     datosPersonales: new InMemoryDatosPersonalesRepository(),
+    talonarios,
   };
 });
 
@@ -100,7 +108,7 @@ describe.skipIf(!url)("PostgreSQL", () => {
     // clientes se borran con DELETE (los usuarios quedan sin cliente) y los usuarios extra de los tests, aparte.
     await db.query(
       `TRUNCATE envios, envio_items, historial_estados, integraciones, api_keys, api_idempotencia, api_solicitudes,
-         webhook_entregas, cobros, cierres_caja, solicitudes_datos, configuracion CASCADE`,
+         webhook_entregas, cobros, cierres_caja, solicitudes_datos, configuracion, talonarios, talonario_guias CASCADE`,
     );
     await db.query("DELETE FROM usuarios WHERE NOT (id = ANY($1::uuid[]))", [USUARIOS_SEED.map((u) => u.id)]);
     await db.query("DELETE FROM clientes");
@@ -140,6 +148,7 @@ describe.skipIf(!url)("PostgreSQL", () => {
       idempotencia: new PgIdempotenciaRepository(db),
       caja: new PgCajaRepository(db),
       datosPersonales: new PgDatosPersonalesRepository(db),
+      talonarios: new PgTalonarioRepository(db),
     };
   });
 
@@ -375,5 +384,40 @@ describe.skipIf(!url)("Migración 015 (fecha de la guía) sobre datos v17", () =
     expect((await repo.buscarPorNumeroGuia(3))!.fechaGuia).toBe("2026-03-10");
     const guias = (await repo.listar({ fechaGuiaDesde: "2026-03-10", fechaGuiaHasta: "2026-03-10" })).map((e) => e.numeroGuia);
     expect(guias).toEqual([3, 2]);
+  });
+
+  it("migración 017: si falla el alta del envío la guía del talonario sigue DISPONIBLE; restricciones de las guías", async () => {
+    await db.query("TRUNCATE envios, envio_items, historial_estados, talonarios, talonario_guias CASCADE");
+    const talonarios = new PgTalonarioRepository(db);
+    const t = await talonarios.reservar((desde) =>
+      Talonario.crear({ cantidad: 2 }, { id: "00000000-0000-4000-c800-000000000001", desde, ahora: new Date(), creadoPor: "Operador" }),
+    );
+    // ruta inexistente: el INSERT del envío falla (FK) después de tomar el bloqueo y validar la guía → ROLLBACK
+    const envio = Envio.crear(
+      {
+        ...solicitudEnvio({ rutaId: 9999 }),
+        formaPago: "CONTRATO",
+        items: [{ tipoCarga: "SOBRE", cantidad: 1, pesoKg: 0.2, costoUnitario: 3, subtotal: 3 }],
+      } as Parameters<typeof Envio.crear>[0],
+      { id: "00000000-0000-4000-c800-000000000002", numeroGuia: t.desde, ahora: new Date(), actor: OPERADOR },
+    );
+    await expect(new PgEnvioRepository(db).guardar(envio, { numeroGuiaIndicado: true })).rejects.toBeDefined();
+    expect((await talonarios.buscarPorId(t.id))?.guia(t.desde).estado).toBe("DISPONIBLE");
+    // un número no puede estar en dos talonarios; los datos deben cuadrar con el estado
+    await expect(
+      db.query("INSERT INTO talonarios (id, desde, hasta, creado_en) VALUES ($1, $2, $2, now())", [
+        "00000000-0000-4000-c800-000000000003",
+        t.desde,
+      ]),
+    ).resolves.toBeDefined();
+    await expect(
+      db.query("INSERT INTO talonario_guias (numero_guia, talonario_id) VALUES ($1, $2)", [t.desde, "00000000-0000-4000-c800-000000000003"]),
+    ).rejects.toMatchObject({ code: "23505" });
+    await expect(
+      db.query("UPDATE talonario_guias SET estado = 'ANULADA' WHERE numero_guia = $1", [t.desde]),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      db.query("INSERT INTO talonarios (id, desde, hasta, creado_en) VALUES ($1, 1, 51, now())", ["00000000-0000-4000-c800-000000000004"]),
+    ).rejects.toMatchObject({ code: "23514" });
   });
 });

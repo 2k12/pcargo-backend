@@ -5,9 +5,10 @@ import { esFormaPago } from "../../../domain/envio/FormaPago.js";
 import { parsearNumeroGuia } from "../../../domain/envio/NumeroGuia.js";
 import type { Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
+import { exigirGuiaDisponible } from "../../../domain/talonario/Talonario.js";
 import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioDTO, type EnvioDTO } from "../../dto/EnvioDTO.js";
-import type { ClienteRepository, EnvioRepository } from "../../ports/repositories.js";
+import type { ClienteRepository, EnvioRepository, TalonarioRepository } from "../../ports/repositories.js";
 import type { Clock, IdGenerator } from "../../ports/services.js";
 import { obtenerOCrearCliente } from "../clientes/Clientes.js";
 import type { EmisorWebhooks } from "../integraciones/EmisorWebhooks.js";
@@ -53,7 +54,11 @@ export interface OpcionesRegistro {
   cobroOrigen?: boolean;
 }
 
-const MAX_INTENTOS_GUIA = 5;
+/**
+ * Reintentos del consecutivo automático. v20: también compiten las reservas de talonarios; cada choque implica que
+ * otro registro o reserva ya se confirmó (el alta se serializa con el mismo bloqueo), así que siempre hay progreso.
+ */
+const MAX_INTENTOS_GUIA = 20;
 
 export class CrearEnvio {
   constructor(
@@ -63,6 +68,8 @@ export class CrearEnvio {
     private readonly clock: Clock,
     private readonly clientes?: ClienteRepository,
     private readonly webhooks?: EmisorWebhooks,
+    /** v20: guías de talonario (número indicado que pertenece a un talonario). */
+    private readonly talonarios?: TalonarioRepository,
   ) {}
 
   /** Envío desde el panel. */
@@ -98,7 +105,15 @@ export class CrearEnvio {
       referenciaExterna: o.referenciaExterna ?? null,
     };
     const automatica = s.numeroGuia === undefined || s.numeroGuia === null || String(s.numeroGuia).trim() === "";
-    const base = { ahora: this.clock.ahora(), actor: o.actor, notaRegistro: o.notaRegistro ?? null };
+    // v20: un número indicado que es de un talonario debe estar DISPONIBLE, y su fecha de guía puede ir desde el día
+    // del talonario. (Se vuelve a comprobar al guardar, bajo bloqueo.)
+    const fechaGuiaMinima = automatica ? undefined : await this.fechaMinimaTalonario(s.numeroGuia!);
+    const base = {
+      ahora: this.clock.ahora(),
+      actor: o.actor,
+      notaRegistro: o.notaRegistro ?? null,
+      ...(fechaGuiaMinima ? { fechaGuiaMinima } : {}),
+    };
 
     if (o.simular) {
       const ctx = { ...base, id: `prueba_${this.ids.uuid()}`, numeroGuia: 0 };
@@ -121,16 +136,22 @@ export class CrearEnvio {
           ? cobroAlRegistrar(envio, { nuevoId: () => (cobroId ??= this.ids.uuid()), ahora: base.ahora, actor: o.actor })
           : null;
       try {
-        await this.envios.guardar(envio, { webhooks, caja: { cobros: cobro ? [cobro] : [], anulaciones: [] } });
+        await this.envios.guardar(envio, {
+          webhooks,
+          caja: { cobros: cobro ? [cobro] : [], anulaciones: [] },
+          numeroGuiaIndicado: !automatica,
+        });
         return { envio, ruta };
       } catch (e) {
-        // Dos registros simultáneos con guía automática pueden tomar el mismo consecutivo: se reintenta con otro.
+        // Dos registros simultáneos con guía automática (o un registro y la reserva de un talonario, v20) pueden
+        // tomar el mismo consecutivo: se reintenta con otro.
         const choqueDeGuia =
           automatica &&
           e instanceof DomainError &&
           e.code === "CONFLICTO" &&
           intento < MAX_INTENTOS_GUIA &&
-          (await this.envios.existeNumeroGuia(envio.numeroGuia)) &&
+          ((await this.envios.existeNumeroGuia(envio.numeroGuia)) ||
+            (await this.talonarios?.buscarPorNumeroGuia(envio.numeroGuia)) != null) &&
           !(await this.envios.buscarPorId(id));
         if (!choqueDeGuia) throw e;
       }
@@ -154,6 +175,19 @@ export class CrearEnvio {
       return (await obtenerOCrearCliente(this.clientes, ctx, s.remitente, s.consentimientoCliente)).id;
     }
     return (await this.clientes.buscarPorTelefono(s.remitente.telefono))?.id ?? null;
+  }
+
+  /**
+   * Número indicado de un talonario (v20): DISPONIBLE → día de creación del talonario (fecha mínima de la guía);
+   * ANULADA → GUIA_ANULADA; USADA → CONFLICTO. Si no es de un talonario → undefined (reglas de siempre).
+   */
+  private async fechaMinimaTalonario(indicado: string | number): Promise<string | undefined> {
+    if (!this.talonarios) return undefined;
+    const n = parsearNumeroGuia(indicado);
+    const talonario = await this.talonarios.buscarPorNumeroGuia(n);
+    if (!talonario) return undefined;
+    exigirGuiaDisponible(talonario.guia(n));
+    return talonario.fechaMinimaGuia;
   }
 
   /** Usa el número de la guía física si se indicó; si no, asigna el consecutivo siguiente. */

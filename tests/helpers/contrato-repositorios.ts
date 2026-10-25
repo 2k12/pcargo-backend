@@ -9,7 +9,9 @@ import type {
   TipoCargaRepository,
   UsuarioRepository,
   ArticuloRestringidoRepository,
+  TalonarioRepository,
 } from "../../src/application/ports/repositories.js";
+import { Talonario } from "../../src/domain/talonario/Talonario.js";
 import type { CambioTipoCarga, TipoCarga } from "../../src/domain/carga/TipoCarga.js";
 import type { ArticuloRestringido } from "../../src/domain/catalogo/ArticuloRestringido.js";
 import type {
@@ -43,6 +45,9 @@ export interface FabricaRepos {
   // ── v12 ──
   caja: CajaRepository;
   datosPersonales: DatosPersonalesRepository;
+  // ── v20 ──
+  /** Sin talonarios; comparte el consecutivo con `envios`. */
+  talonarios: TalonarioRepository;
 }
 
 export const ID_INTEGRACION = "00000000-0000-4000-e000-000000000001";
@@ -1185,6 +1190,124 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(p1.total).toBe(3);
       expect(p1.solicitudes).toEqual([solicitud(2, 30), solicitud(3, 20)]);
       expect((await repos.datosPersonales.listarSolicitudes({ pagina: 2, porPagina: 2 })).solicitudes).toEqual([solicitud(1, 10)]);
+    });
+
+    // ── Talonarios de guías en blanco (v20) ──
+    const idTalonario = (k: number) => `00000000-0000-4000-c600-${String(k).padStart(12, "0")}`;
+    const fabricarTalonario = (k: number, cantidad: number, minutos = 0) => (desde: number) =>
+      Talonario.crear(
+        { cantidad, nota: `Talonario ${k}` },
+        { id: idTalonario(k), desde, ahora: fecha(minutos), creadoPor: OPERADOR.nombre },
+      );
+    /** Envío nuevo con el número de guía indicado (id fijo para reintentar con otro número). */
+    const envioConGuia = (id: string, numeroGuia: number, minutos = 0) => {
+      const s = solicitudEnvio();
+      return Envio.crear(
+        {
+          ...s,
+          formaPago: "CONTRATO",
+          items: [{ tipoCarga: "SOBRE", cantidad: 1, pesoKg: 0.2, costoUnitario: 3, subtotal: 3 }],
+        } as Parameters<typeof Envio.crear>[0],
+        { id, numeroGuia, ahora: fecha(minutos), actor: OPERADOR },
+      );
+    };
+    const idEnvioT = (k: number) => `00000000-0000-4000-c700-${String(k).padStart(12, "0")}`;
+
+    it("talonarios: reserva consecutiva tras el máximo de envíos y talonarios; el consecutivo salta lo reservado", async () => {
+      expect(await repos.talonarios.listar({}, { pagina: 1, porPagina: 10 })).toEqual({ talonarios: [], total: 0 });
+      const e = nuevoEnvio();
+      await repos.envios.guardar(e);
+      const t1 = await repos.talonarios.reservar(fabricarTalonario(1, 3, 5));
+      expect([t1.desde, t1.hasta, t1.creadoPor]).toEqual([e.numeroGuia + 1, e.numeroGuia + 3, OPERADOR.nombre]);
+      const t2 = await repos.talonarios.reservar(fabricarTalonario(2, 2, 6));
+      expect([t2.desde, t2.hasta]).toEqual([e.numeroGuia + 4, e.numeroGuia + 5]);
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(e.numeroGuia + 6);
+
+      // leídos de nuevo, con sus guías en orden y la nota
+      const leido = await repos.talonarios.buscarPorId(t1.id);
+      expect(leido?.toSnapshot()).toEqual(t1.toSnapshot());
+      expect((await repos.talonarios.buscarPorNumeroGuia(e.numeroGuia + 2))?.id).toBe(t1.id);
+      expect((await repos.talonarios.buscarPorNumeroGuia(e.numeroGuia + 5))?.id).toBe(t2.id);
+      expect(await repos.talonarios.buscarPorNumeroGuia(e.numeroGuia)).toBeNull();
+      expect(await repos.talonarios.buscarPorId(idTalonario(99))).toBeNull();
+
+      // una reserva cuyo fabricar falla no deja nada
+      await expect(repos.talonarios.reservar(() => { throw new Error("falla"); })).rejects.toThrow("falla");
+      expect((await repos.talonarios.listar({}, { pagina: 1, porPagina: 10 })).total).toBe(2);
+
+      // un envío con consecutivo automático que cae en un número reservado → CONFLICTO (no se guarda)
+      await expect(repos.envios.guardar(envioConGuia(idEnvioT(1), t1.desde))).rejects.toMatchObject({ code: "CONFLICTO" });
+      expect(await repos.envios.buscarPorId(idEnvioT(1))).toBeNull();
+    });
+
+    it("talonarios: registrar un número indicado DISPONIBLE lo marca USADA; ANULADA → GUIA_ANULADA; repetido → CONFLICTO", async () => {
+      const t = await repos.talonarios.reservar(fabricarTalonario(1, 3));
+      const [a, b, c] = [t.desde, t.desde + 1, t.desde + 2];
+      const usado = envioConGuia(idEnvioT(1), a, 10);
+      await repos.envios.guardar(usado, { numeroGuiaIndicado: true });
+      expect((await repos.talonarios.buscarPorId(t.id))?.guia(a)).toEqual({
+        numeroGuia: a,
+        estado: "USADA",
+        envioId: usado.id,
+        motivo: null,
+        actualizadoEn: fecha(10),
+      });
+      // guardar cambios del envío no vuelve a tocar la guía
+      usado.cambiarEstado("CANCELADO", { ahora: fecha(11), actor: OPERADOR });
+      await repos.envios.guardar(usado);
+      expect((await repos.talonarios.buscarPorId(t.id))?.guia(a)).toMatchObject({ estado: "USADA", envioId: usado.id });
+      await expect(repos.envios.guardar(envioConGuia(idEnvioT(2), a), { numeroGuiaIndicado: true })).rejects.toMatchObject({
+        code: "CONFLICTO",
+      });
+
+      // anular: solo DISPONIBLE; se guarda el motivo y la fecha
+      const anulado = await repos.talonarios.modificar(t.id, (x) => x.anular(b, "Se mojó", fecha(20)));
+      expect(anulado.guia(b)).toEqual({ numeroGuia: b, estado: "ANULADA", envioId: null, motivo: "Se mojó", actualizadoEn: fecha(20) });
+      expect((await repos.talonarios.buscarPorId(t.id))?.toSnapshot()).toEqual(anulado.toSnapshot());
+      await expect(repos.talonarios.modificar(t.id, (x) => x.anular(a, "Dañada", fecha(21)))).rejects.toMatchObject({
+        code: "ESTADO_INVALIDO",
+      });
+      await expect(repos.talonarios.modificar(idTalonario(99), () => {})).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+      await expect(repos.envios.guardar(envioConGuia(idEnvioT(3), b), { numeroGuiaIndicado: true })).rejects.toMatchObject({
+        code: "GUIA_ANULADA",
+      });
+      expect(await repos.envios.buscarPorId(idEnvioT(3))).toBeNull();
+
+      // listados: abiertos (con alguna DISPONIBLE) o todos, recientes primero
+      const t2 = await repos.talonarios.reservar(fabricarTalonario(2, 1, 30));
+      const abiertos = await repos.talonarios.listar({ abiertos: true }, { pagina: 1, porPagina: 10 });
+      expect([abiertos.total, abiertos.talonarios.map((x) => x.id)]).toEqual([2, [t2.id, t.id]]);
+      await repos.envios.guardar(envioConGuia(idEnvioT(4), c, 40), { numeroGuiaIndicado: true });
+      const abiertos2 = await repos.talonarios.listar({ abiertos: true }, { pagina: 1, porPagina: 10 });
+      expect([abiertos2.total, abiertos2.talonarios.map((x) => x.id)]).toEqual([1, [t2.id]]);
+      const p2 = await repos.talonarios.listar({}, { pagina: 2, porPagina: 1 });
+      expect([p2.total, p2.talonarios.map((x) => [x.id, x.disponibles, x.usadas, x.anuladas])]).toEqual([2, [[t.id, 0, 2, 1]]]);
+    });
+
+    it("talonarios: reservas y consecutivos automáticos simultáneos nunca comparten números", async () => {
+      const base = await repos.envios.siguienteNumeroGuia();
+      const reservas = Array.from({ length: 6 }, (_, k) => repos.talonarios.reservar(fabricarTalonario(k + 1, k + 2, k)));
+      // como CrearEnvio: toma el siguiente consecutivo y reintenta si otro (envío o reserva) se le adelantó
+      const automatico = async (k: number): Promise<number> => {
+        for (let intento = 0; ; intento++) {
+          const numero = await repos.envios.siguienteNumeroGuia();
+          try {
+            await repos.envios.guardar(envioConGuia(idEnvioT(k), numero, k));
+            return numero;
+          } catch (e) {
+            if (intento >= 30 || (e as { code?: string }).code !== "CONFLICTO") throw e;
+          }
+        }
+      };
+      const [talonarios, numerosEnvios] = await Promise.all([
+        Promise.all(reservas),
+        Promise.all(Array.from({ length: 6 }, (_, k) => automatico(k + 1))),
+      ]);
+      const reservados = talonarios.flatMap((t) => t.guias.map((g) => g.numeroGuia));
+      const todos = [...reservados, ...numerosEnvios].sort((x, y) => x - y);
+      expect(new Set(todos).size).toBe(todos.length);
+      expect(todos).toEqual(Array.from({ length: todos.length }, (_, i) => base + i));
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(base + todos.length);
     });
   });
 }

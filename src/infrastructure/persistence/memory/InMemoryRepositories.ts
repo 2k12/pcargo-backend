@@ -416,6 +416,12 @@ export interface OpcionesEnvioMemoria {
   caja?: { validar(m: MovimientosCaja): void; aplicar(m: MovimientosCaja): void };
   /** Nombre actual de un usuario (repartidor asignado). */
   nombreUsuario?: (id: string) => string | null;
+  /** v20: talonarios de guías en blanco (consecutivo y uso de la guía en la misma «transacción» que el envío). */
+  talonarios?: {
+    maximoNumero(): number;
+    validarUso(numeroGuia: number, indicado: boolean): void;
+    marcarUsada(numeroGuia: number, envioId: string, fecha: Date): void;
+  };
 }
 
 export class InMemoryEnvioRepository implements EnvioRepository {
@@ -433,6 +439,7 @@ export class InMemoryEnvioRepository implements EnvioRepository {
       if ([...this.datos.values()].some((x) => x.numeroGuia === s.numeroGuia)) {
         throw new DomainError("CONFLICTO", `La guía ${s.numeroGuia} ya está registrada`);
       }
+      this.opciones.talonarios?.validarUso(s.numeroGuia, opciones.numeroGuiaIndicado ?? false);
     } else {
       // Como en Postgres: el origen y la referencia no cambian después de crear el envío; la asignación del
       // repartidor solo cambia con asignarRepartidor, y los datos personales solo al anonimizar.
@@ -452,6 +459,9 @@ export class InMemoryEnvioRepository implements EnvioRepository {
     if (opciones.caja) this.opciones.caja?.validar(opciones.caja);
     if (opciones.webhooks?.length) this.opciones.outbox?.encolar(opciones.webhooks);
     if (opciones.caja) this.opciones.caja?.aplicar(opciones.caja);
+    if (!this.datos.has(s.id) && opciones.numeroGuiaIndicado) {
+      this.opciones.talonarios?.marcarUsada(s.numeroGuia, s.id, s.creadoEn);
+    }
     this.datos.set(envio.id, structuredClone({ ...s, integracionNombre: null }));
   }
 
@@ -520,8 +530,13 @@ export class InMemoryEnvioRepository implements EnvioRepository {
     return [...this.datos.values()].some((x) => x.items.some((i) => i.tipoCarga === codigo));
   }
 
+  /** Mayor número de guía de los envíos guardados (0 si no hay). */
+  maximoNumeroGuia(): number {
+    return Math.max(0, ...[...this.datos.values()].map((x) => x.numeroGuia));
+  }
+
   async siguienteNumeroGuia(): Promise<number> {
-    return Math.max(0, ...[...this.datos.values()].map((x) => x.numeroGuia)) + 1;
+    return Math.max(this.maximoNumeroGuia(), this.opciones.talonarios?.maximoNumero() ?? 0) + 1;
   }
 
   async listar(filtro: FiltroEnvios = {}): Promise<Envio[]> {

@@ -25,6 +25,7 @@ import type { CambiosPerfil, Usuario, UsuarioAdmin, UsuarioConCredenciales } fro
 import type { MovimientosCaja } from "../../../domain/caja/Caja.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import { insertarEntregas } from "./PgIntegraciones.js";
+import { bloquearNumerosGuia, marcarGuiaUsada, SQL_SIGUIENTE_NUMERO_GUIA, validarUsoGuiaTalonario } from "./PgTalonarios.js";
 import type pg from "pg";
 import type { Db } from "./pool.js";
 
@@ -596,6 +597,14 @@ export class PgEnvioRepository implements EnvioRepository {
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
+      // v20: el alta de un envío toma el bloqueo de números de guía (como la reserva de talonarios) y comprueba si el
+      // número es de un talonario. Los cambios de un envío existente no lo toman.
+      const existe = ((await client.query("SELECT 1 FROM envios WHERE id = $1", [s.id])).rowCount ?? 0) > 0;
+      let usarGuiaTalonario = false;
+      if (!existe) {
+        await bloquearNumerosGuia(client);
+        usarGuiaTalonario = await validarUsoGuiaTalonario(client, s.numeroGuia, opciones.numeroGuiaIndicado ?? false);
+      }
       const upsert = await client.query<{ nuevo: boolean; anonimizado_en: Date | null }>(
         `INSERT INTO envios (id, numero_guia, remitente_nombre, remitente_telefono, destinatario_nombre,
             destinatario_telefono, destinatario_direccion, ruta_id, total_piezas, peso_total_kg, descripcion,
@@ -659,6 +668,8 @@ export class PgEnvioRepository implements EnvioRepository {
       if (upsert.rows[0]?.anonimizado_en) {
         await client.query("UPDATE historial_estados SET nota = NULL WHERE envio_id = $1 AND nota IS NOT NULL", [s.id]);
       }
+      // Guía de talonario: pasa a USADA solo si el envío se confirma.
+      if (usarGuiaTalonario && upsert.rows[0]?.nuevo) await marcarGuiaUsada(client, s.numeroGuia, s.id, s.creadoEn);
       // Outbox: los webhooks quedan encolados solo si el cambio del envío se confirma.
       await insertarEntregas(client, opciones.webhooks ?? []);
       // Caja: los cobros se registran solo si el cambio del envío se confirma.
@@ -742,7 +753,7 @@ export class PgEnvioRepository implements EnvioRepository {
   }
 
   async siguienteNumeroGuia(): Promise<number> {
-    const { rows } = await this.db.query<{ n: number }>("SELECT COALESCE(MAX(numero_guia), 0) + 1 AS n FROM envios");
+    const { rows } = await this.db.query<{ n: number }>(SQL_SIGUIENTE_NUMERO_GUIA);
     return Number(rows[0]!.n);
   }
 

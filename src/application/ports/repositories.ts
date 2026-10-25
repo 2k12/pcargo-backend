@@ -9,6 +9,7 @@ import type { EntregaWebhook } from "../../domain/integracion/Webhook.js";
 import type { Ciudad, Ruta } from "../../domain/ruta/Ruta.js";
 import type { Cobro, CierreCaja, MovimientosCaja } from "../../domain/caja/Caja.js";
 import type { SolicitudDatos } from "../../domain/datos/DatosPersonales.js";
+import type { Talonario } from "../../domain/talonario/Talonario.js";
 import type {
   CambiosPerfil,
   Rol,
@@ -188,6 +189,13 @@ export interface OpcionesGuardarEnvio {
   webhooks?: EntregaWebhook[];
   /** Cobros a registrar y cobros ORIGEN a anular (caja, v12), en la MISMA transacción que el cambio del envío. */
   caja?: MovimientosCaja;
+  /**
+   * v20 (solo al crear): el número de guía lo indicó el operador. Si es de un talonario y está DISPONIBLE, la guía
+   * pasa a USADA (con el id del envío) en la MISMA transacción; ANULADA → DomainError("GUIA_ANULADA"); USADA →
+   * DomainError("CONFLICTO"). Sin indicarlo (consecutivo automático), un número reservado en un talonario →
+   * DomainError("CONFLICTO"). La comprobación se hace bajo el mismo bloqueo que la reserva de talonarios.
+   */
+  numeroGuiaIndicado?: boolean;
 }
 
 export interface EstadisticaIntegracion {
@@ -209,7 +217,7 @@ export interface EnvioRepository {
   existeNumeroGuia(numeroGuia: number): Promise<boolean>;
   /** ¿Algún envío (de cualquier estado) lleva ítems de este tipo de carga? */
   usaTipoCarga(codigo: TipoCargaCodigo): Promise<boolean>;
-  /** Máximo número de guía registrado + 1 (1 si no hay envíos). */
+  /** v20: máximo entre los números de envíos y los reservados en talonarios, + 1 (1 si no hay ninguno). */
   siguienteNumeroGuia(): Promise<number>;
   /** Todos los que cumplen el filtro, más recientes primero (para agregados como el dashboard). */
   listar(filtro?: FiltroEnvios): Promise<Envio[]>;
@@ -267,4 +275,24 @@ export interface DatosPersonalesRepository {
   crearSolicitud(solicitud: SolicitudDatos): Promise<void>;
   /** Más recientes primero (orden estable por id). */
   listarSolicitudes(paginacion: Paginacion): Promise<{ solicitudes: SolicitudDatos[]; total: number }>;
+}
+
+/** Talonarios de guías en blanco (v20). */
+export interface TalonarioRepository {
+  /**
+   * Reserva atómica: bajo el mismo bloqueo que el alta de envíos calcula el siguiente consecutivo (máximo entre envíos
+   * y talonarios + 1), llama a `fabricar` con él (puede lanzar) y guarda el talonario con sus guías. Dos reservas
+   * simultáneas (o una reserva y un envío con consecutivo automático) nunca comparten números.
+   */
+  reservar(fabricar: (desde: number) => Talonario): Promise<Talonario>;
+  /** Más recientes primero (orden estable por id). `abiertos`: con al menos una guía DISPONIBLE. */
+  listar(filtro: { abiertos?: boolean }, paginacion: Paginacion): Promise<{ talonarios: Talonario[]; total: number }>;
+  buscarPorId(id: string): Promise<Talonario | null>;
+  /** Talonario que contiene el número; null si no es de ninguno. */
+  buscarPorNumeroGuia(numeroGuia: number): Promise<Talonario | null>;
+  /**
+   * Lee el talonario bloqueando sus guías, aplica `cambio` (p. ej. anular; puede lanzar) y guarda las guías.
+   * NO_ENCONTRADO si no existe.
+   */
+  modificar(id: string, cambio: (t: Talonario) => void): Promise<Talonario>;
 }

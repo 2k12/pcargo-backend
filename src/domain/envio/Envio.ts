@@ -131,8 +131,11 @@ export const MAX_DIAS_FECHA_GUIA = 90;
 /**
  * Valida la fecha de la guía respecto de `hoy` (fecha local de Ecuador): formato `AAAA-MM-DD`, no anterior a hoy y
  * como máximo hoy + 90 días. Vacía (undefined, null o "") → hoy.
+ *
+ * `minima` (v20): guía de un talonario, que se llenó en el camino y se registra después: se admite desde el día
+ * (Ecuador) de creación del talonario en lugar de desde hoy.
  */
-export function validarFechaGuia(valor: string | null | undefined, hoy: string): string {
+export function validarFechaGuia(valor: string | null | undefined, hoy: string, minima?: string): string {
   if (valor === undefined || valor === null) return hoy;
   if (typeof valor !== "string") {
     throw new DomainError("VALIDACION", "La fecha de la guía debe tener el formato AAAA-MM-DD");
@@ -142,7 +145,11 @@ export function validarFechaGuia(valor: string | null | undefined, hoy: string):
   if (!esFechaEC(fecha)) {
     throw new DomainError("VALIDACION", "La fecha de la guía debe ser una fecha válida con el formato AAAA-MM-DD");
   }
-  if (fecha < hoy) {
+  if (minima !== undefined && minima < hoy) {
+    if (fecha < minima) {
+      throw new DomainError("VALIDACION", `La fecha de la guía no puede ser anterior al día del talonario (${minima})`);
+    }
+  } else if (fecha < hoy) {
     throw new DomainError("VALIDACION", `La fecha de la guía no puede ser anterior a hoy (${hoy})`);
   }
   const maxima = sumarDiasEC(hoy, MAX_DIAS_FECHA_GUIA);
@@ -195,7 +202,15 @@ export class Envio {
    */
   static crear(
     datos: NuevoEnvio,
-    ctx: { id: string; numeroGuia: number; ahora: Date; actor: Actor | null; notaRegistro?: string | null },
+    ctx: {
+      id: string;
+      numeroGuia: number;
+      ahora: Date;
+      actor: Actor | null;
+      notaRegistro?: string | null;
+      /** v20: guía de talonario → la fecha de la guía puede ir desde este día (el de creación del talonario). */
+      fechaGuiaMinima?: string;
+    },
   ): Envio {
     validarContacto(datos.remitente, "remitente");
     validarContacto(datos.destinatario, "destinatario");
@@ -213,7 +228,7 @@ export class Envio {
       throw new DomainError("VALIDACION", "La referencia externa solo aplica a envíos ingresados por API");
     }
     const costoAdicional = validarCostoAdicional(datos.costoAdicional);
-    const fechaGuia = validarFechaGuia(datos.fechaGuia, fechaLocalEC(ctx.ahora));
+    const fechaGuia = validarFechaGuia(datos.fechaGuia, fechaLocalEC(ctx.ahora), ctx.fechaGuiaMinima);
     const usuario = ctx.actor ? { id: ctx.actor.id, nombre: ctx.actor.nombre } : null;
     return new Envio({
       id: ctx.id,
