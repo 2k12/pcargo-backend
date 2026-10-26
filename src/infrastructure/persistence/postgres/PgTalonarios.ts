@@ -20,10 +20,35 @@ export async function bloquearNumerosGuia(client: pg.PoolClient): Promise<void> 
   await client.query("SELECT pg_advisory_xact_lock($1)", [BLOQUEO_NUMEROS_GUIA]);
 }
 
-/** Máximo entre los números de envíos y los reservados en talonarios, + 1. */
-export const SQL_SIGUIENTE_NUMERO_GUIA = `SELECT GREATEST(
-    (SELECT COALESCE(MAX(numero_guia), 0) FROM envios),
-    (SELECT COALESCE(MAX(hasta), 0) FROM talonarios)) + 1 AS n`;
+/**
+ * v21: inicio del primer bloque contiguo de `$1` números libres (sin envío ni talonario) después del contador
+ * `secuencia_guias.ultimo`. Recorre solo los números ocupados por encima del contador (índices únicos de
+ * `envios.numero_guia` y `talonario_guias.numero_guia`) y mira el hueco entre cada uno y el siguiente con LEAD; el
+ * contador mismo es el primer borde. Con `$1 = 1` es el siguiente consecutivo.
+ */
+export const SQL_PRIMER_BLOQUE_LIBRE = `
+  WITH s AS (SELECT COALESCE((SELECT ultimo FROM secuencia_guias WHERE id = 1), 0) AS ultimo),
+  bordes AS (
+    SELECT ultimo AS n FROM s
+    UNION
+    SELECT e.numero_guia FROM envios e, s WHERE e.numero_guia > s.ultimo
+    UNION
+    SELECT g.numero_guia FROM talonario_guias g, s WHERE g.numero_guia > s.ultimo
+  )
+  SELECT desde AS n
+    FROM (SELECT n + 1 AS desde, LEAD(n) OVER (ORDER BY n) AS siguiente FROM bordes) h
+   WHERE siguiente IS NULL OR siguiente - desde >= $1::bigint
+   ORDER BY desde
+   LIMIT 1`;
+
+/** v21: el contador del consecutivo pasa a `n` si es mayor (nunca retrocede). Requiere el bloqueo tomado. */
+export async function avanzarSecuenciaGuias(client: pg.PoolClient, n: number): Promise<void> {
+  await client.query(
+    `INSERT INTO secuencia_guias (id, ultimo) VALUES (1, $1)
+     ON CONFLICT (id) DO UPDATE SET ultimo = GREATEST(secuencia_guias.ultimo, EXCLUDED.ultimo)`,
+    [n],
+  );
+}
 
 /**
  * Comprobación al insertar un envío nuevo, ya con el bloqueo tomado (ver OpcionesGuardarEnvio.numeroGuiaIndicado).
@@ -102,12 +127,12 @@ export class PgTalonarioRepository implements TalonarioRepository {
     );
   }
 
-  async reservar(fabricar: (desde: number) => Talonario): Promise<Talonario> {
+  async reservar(cantidad: number, fabricar: (desde: number) => Talonario): Promise<Talonario> {
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
       await bloquearNumerosGuia(client);
-      const { rows } = await client.query<{ n: string | number }>(SQL_SIGUIENTE_NUMERO_GUIA);
+      const { rows } = await client.query<{ n: string | number }>(SQL_PRIMER_BLOQUE_LIBRE, [cantidad]);
       const t = fabricar(Number(rows[0]!.n));
       await client.query(
         "INSERT INTO talonarios (id, desde, hasta, nota, creado_en, creado_por) VALUES ($1, $2, $3, $4, $5, $6)",
@@ -118,6 +143,7 @@ export class PgTalonarioRepository implements TalonarioRepository {
          SELECT n, $1 FROM generate_series($2::bigint, $3::bigint) AS n`,
         [t.id, t.desde, t.hasta],
       );
+      await avanzarSecuenciaGuias(client, t.hasta);
       await client.query("COMMIT");
       return t;
     } catch (e) {

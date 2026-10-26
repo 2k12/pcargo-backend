@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Envio, validarFechaGuia, type NuevoEnvio } from "../../../src/domain/envio/Envio.js";
 import { fechaLocalEC } from "../../../src/domain/shared/FechaEcuador.js";
 import { ESTADOS, puedeTransicionar } from "../../../src/domain/envio/EstadoEnvio.js";
-import { pareceNumeroGuia, parsearNumeroGuia } from "../../../src/domain/envio/NumeroGuia.js";
+import { pareceNumeroGuia, parsearGuiaFisica, parsearNumeroGuia } from "../../../src/domain/envio/NumeroGuia.js";
 import { conEstado, esOperativa, nombreRuta, normalizarNombreCiudad, validarDatosRuta } from "../../../src/domain/ruta/Ruta.js";
 import { ADMIN, OPERADOR } from "../../helpers/fakes.js";
 
@@ -225,6 +225,36 @@ describe("número de guía", () => {
 
   it("el envío conserva su número de guía", () => {
     expect(crear().numeroGuia).toBe(40425);
+  });
+});
+
+describe("guía física (v21)", () => {
+  it.each([
+    ["0040425", 40425],
+    [" 00 40 425 ", 40425],
+    [40425, 40425],
+    ["000999999999999", 999999999999],
+  ])("%j se normaliza como el número de guía → %i", (entrada, esperado) => {
+    expect(parsearGuiaFisica(entrada)).toBe(esperado);
+  });
+
+  it.each([undefined, null, "", "   "])("vacía (%j) → null", (entrada) => {
+    expect(parsearGuiaFisica(entrada)).toBeNull();
+  });
+
+  it.each(["40-425", "abc", "0000", "1234567890123", 0, -3, 1.5])("rechaza %j con VALIDACION que nombra la guía física", (entrada) => {
+    expect(() => parsearGuiaFisica(entrada)).toThrow(expect.objectContaining({ code: "VALIDACION", message: expect.stringMatching(/guía física/) }));
+  });
+
+  it("el envío la guarda normalizada (null si no tiene) y la conserva al reconstruir", () => {
+    expect(crear().guiaFisica).toBeNull();
+    const e = crear({ guiaFisica: "000123456" });
+    expect(e.guiaFisica).toBe(123456);
+    expect(e.numeroGuia).toBe(40425);
+    expect(Envio.reconstruir(e.toSnapshot()).guiaFisica).toBe(123456);
+    const { guiaFisica: _, ...sinGuia } = e.toSnapshot();
+    expect(Envio.reconstruir(sinGuia).guiaFisica).toBeNull(); // envíos anteriores a v21
+    expect(() => crear({ guiaFisica: "12-3" })).toThrow(/guía física/);
   });
 });
 

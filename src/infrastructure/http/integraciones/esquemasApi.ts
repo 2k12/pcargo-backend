@@ -37,6 +37,8 @@ export const nuevoEnvioApiSchema = z.strictObject({
   zona: z.enum(ZONAS).optional(),
   formaPago: z.enum(FORMAS_PAGO).optional(),
   descripcion: z.string().max(500).nullish(),
+  // v21: la guía física antigua es solo del panel: se acepta y se ignora (el caso de uso no la usa)
+  guiaFisica: z.unknown().optional(),
 });
 
 /** El lote se valida en dos pasos: la envoltura aquí y cada elemento por separado (su error va en su resultado). */

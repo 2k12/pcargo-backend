@@ -19,12 +19,12 @@ const crearEnvio = (sobre: Record<string, unknown> = {}) => c.crearEnvio.ejecuta
 const talonario = (cantidad: number, nota?: string) => c.crearTalonario.ejecutar(OPERADOR, { cantidad, nota });
 
 describe("Talonarios de guías en blanco (v20)", () => {
-  it("reserva los N números siguientes al consecutivo (máximo entre envíos y talonarios + 1) con quien lo creó", async () => {
-    await crearEnvio({ numeroGuia: 100 });
+  it("reserva el primer bloque contiguo libre después del contador (v21) con quien lo creó", async () => {
+    await crearEnvio({ numeroGuia: 3 }); // 1–2 no alcanzan para 5
     const t1 = await talonario(5, "Camión Quito – sábado");
     expect(t1).toMatchObject({
-      desde: 101,
-      hasta: 105,
+      desde: 4,
+      hasta: 8,
       cantidad: 5,
       nota: "Camión Quito – sábado",
       creadoEn: clock.ahora().toISOString(),
@@ -33,9 +33,11 @@ describe("Talonarios de guías en blanco (v20)", () => {
       usadas: 0,
       anuladas: 0,
     });
-    expect(t1.guias.map((g) => [g.numeroGuia, g.estado])).toEqual([101, 102, 103, 104, 105].map((n) => [n, "DISPONIBLE"]));
+    expect(t1.guias.map((g) => [g.numeroGuia, g.estado])).toEqual([4, 5, 6, 7, 8].map((n) => [n, "DISPONIBLE"]));
     const t2 = await talonario(2);
-    expect([t2.desde, t2.hasta, t2.nota]).toEqual([106, 107, null]);
+    expect([t2.desde, t2.hasta, t2.nota]).toEqual([9, 10, null]);
+    // el contador quedó al final del bloque: el consecutivo sigue después (1 y 2 ya quedaron atrás)
+    expect((await crearEnvio()).numeroGuia).toBe(11);
   });
 
   it("reservas simultáneas nunca comparten números", async () => {
@@ -44,16 +46,20 @@ describe("Talonarios de guías en blanco (v20)", () => {
     expect(numeros).toEqual(Array.from({ length: 36 }, (_, i) => i + 1));
   });
 
-  it("el consecutivo automático (panel, portal y API) salta los números reservados", async () => {
+  it("el consecutivo automático (panel, portal y API) salta los números reservados y los ocupados (v21)", async () => {
     await crearEnvio({ numeroGuia: 10 });
-    await talonario(3); // 11–13
-    expect((await crearEnvio()).numeroGuia).toBe(14);
-    await talonario(2); // 15–16
+    await talonario(3); // 1–3
+    expect((await crearEnvio()).numeroGuia).toBe(4);
+    await talonario(2); // 5–6
     expect((await c.crearEnvioPortal.ejecutar(PORTAL, {
       destinatario: { nombre: "Ana", telefono: "0987654321", direccion: "Quito" },
       rutaId: 11,
       items: [{ tipoCarga: "SOBRE", cantidad: 1, pesoKg: 0.2 }],
-    })).numeroGuia).toBe(17);
+    })).numeroGuia).toBe(7);
+    // 8–9 no alcanzan para 3 (el 10 está ocupado): el talonario salta a 11–13
+    const t = await talonario(3);
+    expect([t.desde, t.hasta]).toEqual([11, 13]);
+    expect((await crearEnvio()).numeroGuia).toBe(14);
   });
 
   it("registrar una guía DISPONIBLE crea el envío y la marca USADA; repetida → CONFLICTO", async () => {

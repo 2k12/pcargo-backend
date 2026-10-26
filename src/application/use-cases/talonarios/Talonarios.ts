@@ -74,7 +74,7 @@ export interface SolicitudTalonario {
   nota?: string | null;
 }
 
-/** Reserva de forma atómica `cantidad` números consecutivos siguientes al consecutivo. */
+/** Reserva de forma atómica `cantidad` números consecutivos: el primer bloque contiguo libre después del contador (v21). */
 export class CrearTalonario {
   constructor(
     private readonly talonarios: TalonarioRepository,
@@ -86,8 +86,10 @@ export class CrearTalonario {
     const id = this.ids.uuid();
     const ahora = this.clock.ahora();
     // Valida antes de tomar el bloqueo (y otra vez dentro, con el número inicial ya calculado).
-    Talonario.crear(s, { id, desde: 1, ahora, creadoPor: actor.nombre });
-    const t = await this.talonarios.reservar((desde) => Talonario.crear(s, { id, desde, ahora, creadoPor: actor.nombre }));
+    const { cantidad } = Talonario.crear(s, { id, desde: 1, ahora, creadoPor: actor.nombre });
+    const t = await this.talonarios.reservar(cantidad, (desde) =>
+      Talonario.crear(s, { id, desde, ahora, creadoPor: actor.nombre }),
+    );
     return toTalonarioDTO(t);
   }
 }

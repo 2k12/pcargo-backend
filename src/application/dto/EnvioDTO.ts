@@ -33,6 +33,8 @@ export interface EvidenciaEntregaDTO {
 export interface EnvioDTO {
   id: string;
   numeroGuia: number;
+  /** v21: número de la guía física antigua, si la tuvo. */
+  guiaFisica: number | null;
   clienteId: string | null;
   remitente: { nombre: string; telefono: string; direccion: string | null };
   destinatario: { nombre: string; telefono: string; direccion: string };
@@ -86,6 +88,7 @@ export function toEnvioDTO(envio: Envio, ruta: Ruta | undefined, conHistorial = 
   return {
     id: s.id,
     numeroGuia: s.numeroGuia,
+    guiaFisica: envio.guiaFisica,
     clienteId: s.clienteId ?? null,
     remitente: { nombre: s.remitente.nombre, telefono: s.remitente.telefono, direccion: s.remitente.direccion ?? null },
     destinatario: s.destinatario,

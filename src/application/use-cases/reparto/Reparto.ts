@@ -8,7 +8,7 @@ import type { Actor } from "../../../domain/usuario/Usuario.js";
 import { toEnvioRepartoDTO, type EnvioRepartoDTO } from "../../dto/VistasEnvioDTO.js";
 import type { EnvioRepository, RutaRepository, UsuarioRepository } from "../../ports/repositories.js";
 import type { Clock } from "../../ports/services.js";
-import type { CambiarEstadoEnvio } from "../envios/ConsultasEnvio.js";
+import { buscarPorNumeroOGuiaFisica, type CambiarEstadoEnvio } from "../envios/ConsultasEnvio.js";
 import type { SolicitudEvidencia, SubirEvidencia } from "../envios/EvidenciaEntrega.js";
 
 // Asignación de repartidor (panel) y app del repartidor (contrato v12).
@@ -100,7 +100,7 @@ export class ListarEnviosRepartidor {
   }
 }
 
-/** Escaneo del QR o búsqueda por número de guía (acepta ceros a la izquierda). */
+/** Escaneo del QR o búsqueda por número de guía o guía física (acepta ceros a la izquierda). */
 export class BuscarGuiaRepartidor {
   constructor(
     private readonly envios: EnvioRepository,
@@ -108,7 +108,8 @@ export class BuscarGuiaRepartidor {
   ) {}
 
   async ejecutar(actor: Actor, numeroGuia: string): Promise<EnvioRepartoDTO> {
-    const envio = exigirAsignado(await this.envios.buscarPorNumeroGuia(parsearNumeroGuia(numeroGuia)), actor);
+    // v21: primero por número de guía; si no hay, por guía física antigua.
+    const envio = exigirAsignado(await buscarPorNumeroOGuiaFisica(this.envios, parsearNumeroGuia(numeroGuia)), actor);
     return toEnvioRepartoDTO(envio, (await this.rutas.buscarPorId(envio.rutaId)) ?? undefined);
   }
 }

@@ -25,7 +25,13 @@ import type { CambiosPerfil, Usuario, UsuarioAdmin, UsuarioConCredenciales } fro
 import type { MovimientosCaja } from "../../../domain/caja/Caja.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import { insertarEntregas } from "./PgIntegraciones.js";
-import { bloquearNumerosGuia, marcarGuiaUsada, SQL_SIGUIENTE_NUMERO_GUIA, validarUsoGuiaTalonario } from "./PgTalonarios.js";
+import {
+  avanzarSecuenciaGuias,
+  bloquearNumerosGuia,
+  marcarGuiaUsada,
+  SQL_PRIMER_BLOQUE_LIBRE,
+  validarUsoGuiaTalonario,
+} from "./PgTalonarios.js";
 import type pg from "pg";
 import type { Db } from "./pool.js";
 
@@ -496,6 +502,8 @@ export class PgRutaRepository implements RutaRepository {
 interface EnvioRow {
   id: string;
   numero_guia: number;
+  /** BIGINT (texto en pg). */
+  guia_fisica: string | number | null;
   cliente_id: string | null;
   remitente_nombre: string;
   remitente_telefono: string;
@@ -611,9 +619,9 @@ export class PgEnvioRepository implements EnvioRepository {
             costo, forma_pago, estado, creado_por, creado_en, actualizado_en, cliente_id, zona,
             remitente_direccion, evidencia_recibido_por, evidencia_tipo, evidencia_bytes, evidencia_subida_en,
             evidencia_subida_por, evidencia_clave, integracion_id, referencia_externa, anonimizado_en, costo_adicional,
-            fecha_guia)
+            fecha_guia, guia_fisica)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-            $31)
+            $31,$32)
          ON CONFLICT (id) DO UPDATE SET estado = EXCLUDED.estado, actualizado_en = EXCLUDED.actualizado_en,
             evidencia_recibido_por = EXCLUDED.evidencia_recibido_por, evidencia_tipo = EXCLUDED.evidencia_tipo,
             evidencia_bytes = EXCLUDED.evidencia_bytes, evidencia_subida_en = EXCLUDED.evidencia_subida_en,
@@ -642,7 +650,7 @@ export class PgEnvioRepository implements EnvioRepository {
           s.clienteId ?? null, s.zona, s.remitente.direccion,
           ev?.recibidoPor ?? null, ev?.tipo ?? null, ev?.bytes ?? null, ev?.subidaEn ?? null,
           ev?.subidaPor?.id ?? null, ev?.clave ?? null, s.integracionId ?? null, s.referenciaExterna ?? null,
-          s.anonimizadoEn ?? null, s.costoAdicional, s.fechaGuia,
+          s.anonimizadoEn ?? null, s.costoAdicional, s.fechaGuia, s.guiaFisica ?? null,
         ],
       );
       if (upsert.rows[0]?.nuevo) {
@@ -670,6 +678,8 @@ export class PgEnvioRepository implements EnvioRepository {
       }
       // Guía de talonario: pasa a USADA solo si el envío se confirma.
       if (usarGuiaTalonario && upsert.rows[0]?.nuevo) await marcarGuiaUsada(client, s.numeroGuia, s.id, s.creadoEn);
+      // v21: un consecutivo automático avanza el contador (bajo el mismo bloqueo).
+      if (!existe && !opciones.numeroGuiaIndicado && upsert.rows[0]?.nuevo) await avanzarSecuenciaGuias(client, s.numeroGuia);
       // Outbox: los webhooks quedan encolados solo si el cambio del envío se confirma.
       await insertarEntregas(client, opciones.webhooks ?? []);
       // Caja: los cobros se registran solo si el cambio del envío se confirma.
@@ -680,6 +690,10 @@ export class PgEnvioRepository implements EnvioRepository {
       // Carrera entre dos registros con el mismo número de guía: la restricción UNIQUE decide.
       if ((e as { code?: string; constraint?: string }).code === "23505" && (e as { constraint?: string }).constraint === "envios_numero_guia_key") {
         throw new DomainError("CONFLICTO", `La guía ${s.numeroGuia} ya está registrada`);
+      }
+      // v21: guía física repetida (también en una carrera entre dos registros): el índice único decide.
+      if ((e as { code?: string; constraint?: string }).code === "23505" && (e as { constraint?: string }).constraint === "envios_guia_fisica_key") {
+        throw new DomainError("CONFLICTO", `La guía física ${s.guiaFisica} ya está registrada`);
       }
       if ((e as { code?: string; constraint?: string }).code === "23505" && (e as { constraint?: string }).constraint === "envios_integracion_referencia_key") {
         throw new DomainError("CONFLICTO", `Ya existe un envío con la referencia ${s.referenciaExterna}`);
@@ -730,6 +744,10 @@ export class PgEnvioRepository implements EnvioRepository {
     return (await this.consultar("WHERE e.numero_guia = $1", [numeroGuia]))[0] ?? null;
   }
 
+  async buscarPorGuiaFisica(guiaFisica: number): Promise<Envio | null> {
+    return (await this.consultar("WHERE e.guia_fisica = $1", [guiaFisica]))[0] ?? null;
+  }
+
   async buscarPorReferencia(integracionId: string, referenciaExterna: string): Promise<Envio | null> {
     return (await this.consultar("WHERE e.integracion_id = $1 AND e.referencia_externa = $2", [integracionId, referenciaExterna]))[0] ?? null;
   }
@@ -753,7 +771,7 @@ export class PgEnvioRepository implements EnvioRepository {
   }
 
   async siguienteNumeroGuia(): Promise<number> {
-    const { rows } = await this.db.query<{ n: number }>(SQL_SIGUIENTE_NUMERO_GUIA);
+    const { rows } = await this.db.query<{ n: string | number }>(SQL_PRIMER_BLOQUE_LIBRE, [1]);
     return Number(rows[0]!.n);
   }
 
@@ -797,7 +815,12 @@ export class PgEnvioRepository implements EnvioRepository {
     if (f.q?.trim()) {
       // Los comodines de LIKE en el texto buscado se escapan: "%" o "_" se buscan literalmente.
       const i = params.push(`%${f.q.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
-      const porGuia = f.numeroGuia ? `e.numero_guia = $${params.push(f.numeroGuia)} OR ` : "";
+      const porGuia = f.numeroGuia
+        ? (() => {
+            const g = params.push(f.numeroGuia);
+            return `e.numero_guia = $${g} OR e.guia_fisica = $${g} OR `;
+          })()
+        : "";
       cond.push(
         `(${porGuia}e.remitente_nombre ILIKE $${i} OR e.destinatario_nombre ILIKE $${i} OR e.referencia_externa ILIKE $${i})`,
       );
@@ -862,6 +885,7 @@ export class PgEnvioRepository implements EnvioRepository {
       Envio.reconstruir({
         id: r.id,
         numeroGuia: Number(r.numero_guia),
+        guiaFisica: r.guia_fisica === null ? null : Number(r.guia_fisica),
         clienteId: r.cliente_id,
         remitente: { nombre: r.remitente_nombre, telefono: r.remitente_telefono, direccion: r.remitente_direccion },
         destinatario: {

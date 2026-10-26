@@ -1217,9 +1217,9 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(await repos.talonarios.listar({}, { pagina: 1, porPagina: 10 })).toEqual({ talonarios: [], total: 0 });
       const e = nuevoEnvio();
       await repos.envios.guardar(e);
-      const t1 = await repos.talonarios.reservar(fabricarTalonario(1, 3, 5));
+      const t1 = await repos.talonarios.reservar(3, fabricarTalonario(1, 3, 5));
       expect([t1.desde, t1.hasta, t1.creadoPor]).toEqual([e.numeroGuia + 1, e.numeroGuia + 3, OPERADOR.nombre]);
-      const t2 = await repos.talonarios.reservar(fabricarTalonario(2, 2, 6));
+      const t2 = await repos.talonarios.reservar(2, fabricarTalonario(2, 2, 6));
       expect([t2.desde, t2.hasta]).toEqual([e.numeroGuia + 4, e.numeroGuia + 5]);
       expect(await repos.envios.siguienteNumeroGuia()).toBe(e.numeroGuia + 6);
 
@@ -1232,7 +1232,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(await repos.talonarios.buscarPorId(idTalonario(99))).toBeNull();
 
       // una reserva cuyo fabricar falla no deja nada
-      await expect(repos.talonarios.reservar(() => { throw new Error("falla"); })).rejects.toThrow("falla");
+      await expect(repos.talonarios.reservar(1, () => { throw new Error("falla"); })).rejects.toThrow("falla");
       expect((await repos.talonarios.listar({}, { pagina: 1, porPagina: 10 })).total).toBe(2);
 
       // un envío con consecutivo automático que cae en un número reservado → CONFLICTO (no se guarda)
@@ -1241,7 +1241,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
     });
 
     it("talonarios: registrar un número indicado DISPONIBLE lo marca USADA; ANULADA → GUIA_ANULADA; repetido → CONFLICTO", async () => {
-      const t = await repos.talonarios.reservar(fabricarTalonario(1, 3));
+      const t = await repos.talonarios.reservar(3, fabricarTalonario(1, 3));
       const [a, b, c] = [t.desde, t.desde + 1, t.desde + 2];
       const usado = envioConGuia(idEnvioT(1), a, 10);
       await repos.envios.guardar(usado, { numeroGuiaIndicado: true });
@@ -1274,7 +1274,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(await repos.envios.buscarPorId(idEnvioT(3))).toBeNull();
 
       // listados: abiertos (con alguna DISPONIBLE) o todos, recientes primero
-      const t2 = await repos.talonarios.reservar(fabricarTalonario(2, 1, 30));
+      const t2 = await repos.talonarios.reservar(1, fabricarTalonario(2, 1, 30));
       const abiertos = await repos.talonarios.listar({ abiertos: true }, { pagina: 1, porPagina: 10 });
       expect([abiertos.total, abiertos.talonarios.map((x) => x.id)]).toEqual([2, [t2.id, t.id]]);
       await repos.envios.guardar(envioConGuia(idEnvioT(4), c, 40), { numeroGuiaIndicado: true });
@@ -1286,7 +1286,7 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
 
     it("talonarios: reservas y consecutivos automáticos simultáneos nunca comparten números", async () => {
       const base = await repos.envios.siguienteNumeroGuia();
-      const reservas = Array.from({ length: 6 }, (_, k) => repos.talonarios.reservar(fabricarTalonario(k + 1, k + 2, k)));
+      const reservas = Array.from({ length: 6 }, (_, k) => repos.talonarios.reservar(k + 2, fabricarTalonario(k + 1, k + 2, k)));
       // como CrearEnvio: toma el siguiente consecutivo y reintenta si otro (envío o reserva) se le adelantó
       const automatico = async (k: number): Promise<number> => {
         for (let intento = 0; ; intento++) {
@@ -1308,6 +1308,88 @@ export function contratoRepositorios(nombre: string, fabrica: () => Promise<Fabr
       expect(new Set(todos).size).toBe(todos.length);
       expect(todos).toEqual(Array.from({ length: todos.length }, (_, i) => base + i));
       expect(await repos.envios.siguienteNumeroGuia()).toBe(base + todos.length);
+    });
+
+    // ── Consecutivo corto y guía física (v21) ──
+    /** Envío nuevo con número de guía y guía física. */
+    const envioConFisica = (id: string, numeroGuia: number, guiaFisica: string | number | null, minutos = 0) => {
+      const s = solicitudEnvio();
+      return Envio.crear(
+        {
+          ...s,
+          formaPago: "CONTRATO",
+          guiaFisica,
+          items: [{ tipoCarga: "SOBRE", cantidad: 1, pesoKg: 0.2, costoUnitario: 3, subtotal: 3 }],
+        } as Parameters<typeof Envio.crear>[0],
+        { id, numeroGuia, ahora: fecha(minutos), actor: OPERADOR },
+      );
+    };
+
+    it("v21 consecutivo: arranca en 1, salta ocupados y solo avanza con los automáticos; talonario = primer bloque contiguo", async () => {
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(1);
+      // un número indicado ocupa pero no mueve el contador
+      await repos.envios.guardar(envioConGuia(idEnvioT(1), 2), { numeroGuiaIndicado: true });
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(1);
+      await repos.envios.guardar(envioConGuia(idEnvioT(2), 1)); // automático → contador 1
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(3); // el 2 está ocupado
+      await repos.envios.guardar(envioConGuia(idEnvioT(3), 3));
+      await repos.envios.guardar(envioConGuia(idEnvioT(4), 5), { numeroGuiaIndicado: true });
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(4);
+      // talonario de 2: el hueco 4 no alcanza (5 ocupado) → 6–7; el contador pasa a 7
+      const t = await repos.talonarios.reservar(2, fabricarTalonario(1, 2));
+      expect([t.desde, t.hasta]).toEqual([6, 7]);
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(8);
+      // un número viejo y alto no arrastra el consecutivo
+      await repos.envios.guardar(envioConGuia(idEnvioT(5), 40425), { numeroGuiaIndicado: true });
+      await repos.envios.guardar(envioConGuia(idEnvioT(6), 9), { numeroGuiaIndicado: true });
+      const t2 = await repos.talonarios.reservar(1, fabricarTalonario(2, 1));
+      expect(t2.desde).toBe(8);
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(10);
+      // talonario de 3 cuando quedan 10–11 libres antes de un ocupado (12): salta a 13–15
+      await repos.envios.guardar(envioConGuia(idEnvioT(7), 12), { numeroGuiaIndicado: true });
+      const t3 = await repos.talonarios.reservar(3, fabricarTalonario(3, 3));
+      expect([t3.desde, t3.hasta]).toEqual([13, 15]);
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(16);
+      // actualizar un envío existente no mueve el contador
+      const e = (await repos.envios.buscarPorId(idEnvioT(5)))!;
+      e.cambiarEstado("EN_TRANSITO", { ahora: fecha(5), actor: OPERADOR });
+      await repos.envios.guardar(e);
+      expect(await repos.envios.siguienteNumeroGuia()).toBe(16);
+    });
+
+    it("v21 guía física: se guarda y se busca; repetida → CONFLICTO; puede coincidir con el numeroGuia de otro; filtro por número", async () => {
+      const a = envioConFisica(idEnvioT(1), 1, null, 1);
+      const b = envioConFisica(idEnvioT(2), 2, "0001", 2); // guía física = numeroGuia de `a`
+      const c = envioConFisica(idEnvioT(3), 3, 40425, 3);
+      for (const e of [a, b, c]) await repos.envios.guardar(e);
+      expect((await repos.envios.buscarPorId(a.id))?.guiaFisica).toBeNull();
+      expect((await repos.envios.buscarPorId(b.id))?.guiaFisica).toBe(1);
+      expect((await repos.envios.buscarPorGuiaFisica(40425))?.id).toBe(c.id);
+      expect((await repos.envios.buscarPorGuiaFisica(1))?.id).toBe(b.id);
+      expect((await repos.envios.buscarPorNumeroGuia(1))?.id).toBe(a.id);
+      expect(await repos.envios.buscarPorGuiaFisica(2)).toBeNull();
+
+      await expect(repos.envios.guardar(envioConFisica(idEnvioT(4), 4, 40425))).rejects.toMatchObject({ code: "CONFLICTO" });
+      expect(await repos.envios.buscarPorId(idEnvioT(4))).toBeNull();
+      // dos altas simultáneas con la misma guía física: solo una se guarda
+      const resultados = await Promise.allSettled([
+        repos.envios.guardar(envioConFisica(idEnvioT(5), 5, 90001)),
+        repos.envios.guardar(envioConFisica(idEnvioT(6), 6, 90001)),
+      ]);
+      expect(resultados.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+      expect((resultados.find((r) => r.status === "rejected") as PromiseRejectedResult).reason).toMatchObject({ code: "CONFLICTO" });
+
+      // filtro numeroGuia (q con dígitos): numeroGuia o guiaFisica
+      const porUno = await repos.envios.listar({ q: "1", numeroGuia: 1 });
+      expect(porUno.map((e) => e.id).sort()).toEqual([a.id, b.id].sort());
+      const porFisica = await repos.envios.listarPagina({ q: "40425", numeroGuia: 40425 }, { pagina: 1, porPagina: 10 });
+      expect([porFisica.total, porFisica.envios.map((e) => e.id)]).toEqual([1, [c.id]]);
+
+      // la guía física no cambia al guardar cambios del envío
+      const leido = (await repos.envios.buscarPorId(c.id))!;
+      leido.cambiarEstado("EN_TRANSITO", { ahora: fecha(10), actor: OPERADOR });
+      await repos.envios.guardar(leido);
+      expect((await repos.envios.buscarPorId(c.id))?.guiaFisica).toBe(40425);
     });
   });
 }

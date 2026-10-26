@@ -127,7 +127,7 @@ describe("Número de guía", () => {
     await request(app).get("/api/seguimiento/050001").expect(200);
 
     const auto = await request(app).post("/api/envios").set(auth(tokenOperador)).send(solicitudEnvio()).expect(201);
-    expect(auto.body.numeroGuia).toBe(50002);
+    expect(auto.body.numeroGuia).toBe(1);
   });
 });
 

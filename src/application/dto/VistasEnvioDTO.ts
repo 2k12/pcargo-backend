@@ -28,6 +28,8 @@ export const porCobrar = (envio: Envio): number =>
 export interface EnvioRepartoDTO {
   id: string;
   numeroGuia: number;
+  /** v21 */
+  guiaFisica: number | null;
   estado: string;
   remitente: { nombre: string; telefono: string; direccion: string | null };
   destinatario: { nombre: string; telefono: string; direccion: string };
@@ -53,6 +55,7 @@ export function toEnvioRepartoDTO(envio: Envio, ruta: Ruta | undefined): EnvioRe
   return {
     id: s.id,
     numeroGuia: s.numeroGuia,
+    guiaFisica: envio.guiaFisica,
     estado: s.estado,
     remitente: { nombre: s.remitente.nombre, telefono: s.remitente.telefono, direccion: s.remitente.direccion ?? null },
     destinatario: { ...s.destinatario },

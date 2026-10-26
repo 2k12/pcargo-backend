@@ -31,3 +31,21 @@ export function parsearNumeroGuia(valor: string | number): number {
   }
   return n;
 }
+
+/**
+ * v21: número impreso en una guía física antigua (preimpresa, no del sistema). Mismas reglas de entrada que el número
+ * de guía (solo dígitos, hasta 12, sin contar espacios ni ceros a la izquierda). Vacío (undefined, null o solo
+ * espacios) → null (el envío no tiene guía física).
+ */
+export function parsearGuiaFisica(valor: string | number | null | undefined): number | null {
+  if (valor === undefined || valor === null) return null;
+  if (typeof valor === "string" && valor.trim() === "") return null;
+  try {
+    return parsearNumeroGuia(valor);
+  } catch (e) {
+    if (e instanceof DomainError) {
+      throw new DomainError("VALIDACION", e.message.replace("El número de guía", "La guía física"));
+    }
+    throw e;
+  }
+}

@@ -97,8 +97,11 @@ export const crearEnvioSchema = cotizacionSchema.extend({
   destinatario: z.object({ nombre: texto, telefono: texto, direccion: texto }),
   formaPago: z.enum(FORMAS_PAGO),
   descripcion: z.string().max(500).nullish(),
-  // guía física: texto (admite ceros a la izquierda) o número; el dominio valida el formato
+  // número de guía del sistema (solo guías de talonario): texto (admite ceros a la izquierda) o número; el dominio
+  // valida el formato
   numeroGuia: z.union([z.string().max(40), z.number()]).nullish(),
+  // v21: número de una guía física antigua (opcional, único); mismas reglas de entrada que numeroGuia
+  guiaFisica: z.union([z.string().max(40), z.number()]).nullish(),
   // v15: recargo en USD; el dominio valida ≥ 0, ≤ 9999.99 y hasta 2 decimales (400 VALIDACION)
   costoAdicional: z.number().optional(),
   // v18: fecha de la guía AAAA-MM-DD; el dominio valida formato y rango hoy..hoy+90 (400 VALIDACION)
@@ -408,5 +411,7 @@ export const crearEnvioPortalSchema = cotizacionSchema
     destinatario: z.object({ nombre: texto, telefono: texto, direccion: texto }),
     formaPago: z.enum(["CONTRATO", "AL_COBRO"]).optional(),
     descripcion: z.string().max(500).nullish(),
+    // v21: el portal no registra guías físicas antiguas: se acepta y se ignora
+    guiaFisica: z.unknown().optional(),
   })
   .strict();

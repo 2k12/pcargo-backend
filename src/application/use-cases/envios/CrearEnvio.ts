@@ -2,7 +2,7 @@ import { cobroAlRegistrar } from "../../../domain/caja/Caja.js";
 import type { Contacto, Destinatario } from "../../../domain/envio/Envio.js";
 import { Envio } from "../../../domain/envio/Envio.js";
 import { esFormaPago } from "../../../domain/envio/FormaPago.js";
-import { parsearNumeroGuia } from "../../../domain/envio/NumeroGuia.js";
+import { parsearGuiaFisica, parsearNumeroGuia } from "../../../domain/envio/NumeroGuia.js";
 import type { Ruta } from "../../../domain/ruta/Ruta.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import { exigirGuiaDisponible } from "../../../domain/talonario/Talonario.js";
@@ -23,8 +23,10 @@ export interface SolicitudEnvio {
   zona?: string | null;
   formaPago: string;
   descripcion?: string | null;
-  /** Número de la guía física. Vacío → consecutivo automático. */
+  /** Número de guía del sistema (solo guías de talonario). Vacío → consecutivo automático. */
   numeroGuia?: string | number | null;
+  /** v21: número de una guía física antigua (solo panel; el portal y la API de empresas no la envían). Único. */
+  guiaFisica?: string | number | null;
   /** v15: recargo en USD sumado al costo (solo panel; la API de empresas y el portal no lo envían). */
   costoAdicional?: number;
   /** v18: fecha de la guía AAAA-MM-DD (solo panel; la API de empresas y el portal no la envían: siempre hoy). */
@@ -101,6 +103,7 @@ export class CrearEnvio {
       descripcion: s.descripcion,
       costoAdicional: s.costoAdicional,
       fechaGuia: s.fechaGuia,
+      guiaFisica: s.guiaFisica,
       integracion: o.integracion ?? null,
       referenciaExterna: o.referenciaExterna ?? null,
     };
@@ -125,6 +128,11 @@ export class CrearEnvio {
 
     const id = this.ids.uuid();
     Envio.crear(datos, { ...base, id, numeroGuia: 0 }); // valida remitente/destinatario antes de dar de alta un cliente
+    // v21: la guía física es única entre envíos (una carrera la resuelve el repositorio, también con CONFLICTO).
+    const guiaFisica = parsearGuiaFisica(s.guiaFisica);
+    if (guiaFisica !== null && (await this.envios.buscarPorGuiaFisica(guiaFisica))) {
+      throw new DomainError("CONFLICTO", `La guía física ${guiaFisica} ya está registrada`);
+    }
     const clienteId = await this.cliente(s);
     let cobroId: string | undefined;
     for (let intento = 1; ; intento++) {
@@ -190,7 +198,7 @@ export class CrearEnvio {
     return talonario.fechaMinimaGuia;
   }
 
-  /** Usa el número de la guía física si se indicó; si no, asigna el consecutivo siguiente. */
+  /** Usa el número indicado (guía de talonario) si lo hay; si no, el consecutivo siguiente (v21: ver el puerto). */
   private async numeroGuia(indicado: string | number | null | undefined): Promise<number> {
     const vacio = indicado === undefined || indicado === null || String(indicado).trim() === "";
     if (!vacio) {

@@ -26,6 +26,38 @@ export function parsearNumeroGuiaSeguro(texto: string): number | undefined {
   }
 }
 
+/**
+ * v21: envío por número de guía del sistema y, si no hay ninguno, por guía física antigua (seguimiento público y
+ * escaneo del repartidor).
+ */
+export async function buscarPorNumeroOGuiaFisica(envios: EnvioRepository, numero: number): Promise<Envio | null> {
+  return (await envios.buscarPorNumeroGuia(numero)) ?? (await envios.buscarPorGuiaFisica(numero));
+}
+
+/**
+ * v21: búsqueda rápida del panel. Los envíos cuyo número de guía **o** guía física es ese número (0, 1 o 2; primero el
+ * que coincide por número de guía). Acepta ceros a la izquierda; otro texto → VALIDACION.
+ */
+export class BuscarEnviosPorGuia {
+  constructor(
+    private readonly envios: EnvioRepository,
+    private readonly rutas: RutaRepository,
+  ) {}
+
+  async ejecutar(numero: string): Promise<EnvioDTO[]> {
+    const n = parsearNumeroGuia(numero);
+    const [porNumero, porGuiaFisica] = await Promise.all([
+      this.envios.buscarPorNumeroGuia(n),
+      this.envios.buscarPorGuiaFisica(n),
+    ]);
+    const encontrados = [porNumero, porGuiaFisica].filter((e): e is Envio => e !== null);
+    const unicos = encontrados.filter((e, i) => encontrados.findIndex((x) => x.id === e.id) === i);
+    if (unicos.length === 0) return [];
+    const mapa = await rutasPorId(this.rutas);
+    return unicos.map((e) => toEnvioDTO(e, mapa.get(e.rutaId)));
+  }
+}
+
 async function rutasPorId(rutas: RutaRepository): Promise<Map<number, Ruta>> {
   return new Map((await rutas.listar()).map((r) => [r.id, r]));
 }
@@ -67,7 +99,7 @@ export class ListarEnvios {
     if (hasta) filtro.fechaGuiaHasta = hasta;
     const porPagina = Math.min(Math.max(1, Math.trunc(paginacion.porPagina ?? POR_PAGINA_DEFECTO)), POR_PAGINA_MAX);
     const pagina = Math.max(1, Math.trunc(paginacion.pagina ?? 1));
-    // Si el texto es un número, también busca la guía exacta sin importar ceros a la izquierda.
+    // Si el texto es un número, también busca la guía o la guía física (v21) exactas sin importar ceros a la izquierda.
     const q = filtro.q?.trim();
     const conGuia = q && pareceNumeroGuia(q) ? { ...filtro, numeroGuia: parsearNumeroGuiaSeguro(q) } : filtro;
     const [{ envios, total }, mapa] = await Promise.all([
@@ -169,7 +201,7 @@ export class ConsultarSeguimiento {
   ) {}
 
   async ejecutar(numeroGuia: string): Promise<SeguimientoDTO> {
-    const envio = await this.envios.buscarPorNumeroGuia(parsearNumeroGuia(numeroGuia));
+    const envio = await buscarPorNumeroOGuiaFisica(this.envios, parsearNumeroGuia(numeroGuia));
     if (!envio) throw new DomainError("NO_ENCONTRADO", "No existe un envío con ese número de guía");
     const ruta = await this.rutas.buscarPorId(envio.rutaId);
     const s = envio.toSnapshot();

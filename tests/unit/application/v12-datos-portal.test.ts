@@ -141,9 +141,9 @@ describe("Portal de clientes empresa", () => {
   });
 
   it("registra con el cliente como remitente, CONTRATO por defecto, guía consecutiva y sin cobro", async () => {
-    await crearEnvio({ numeroGuia: 500 });
+    await crearEnvio({ numeroGuia: 1 });
     const e = await c.crearEnvioPortal.ejecutar(PORTAL, nuevo());
-    expect(e).toMatchObject({ numeroGuia: 501, formaPago: "CONTRATO", costo: 6, estado: "REGISTRADO", destinatario });
+    expect(e).toMatchObject({ numeroGuia: 2, formaPago: "CONTRATO", costo: 6, estado: "REGISTRADO", destinatario });
     expect(e).not.toHaveProperty("remitente");
     expect(e.historial).toEqual([{ estado: "REGISTRADO", nota: "Registrado desde el portal de clientes", fecha: clock.ahora().toISOString(), usuario: null }]);
     const panel = await c.obtenerEnvio.ejecutar(e.id);

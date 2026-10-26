@@ -147,7 +147,7 @@ export interface FiltroEnvios {
   rutaId?: number;
   formaPago?: FormaPago;
   clienteId?: string;
-  /** Número de guía exacto (se combina con `q` mediante OR). */
+  /** Número de guía o guía física (v21) exactos (se combina con `q` mediante OR). */
   numeroGuia?: number;
   /** Busca en remitente, destinatario y referencia externa (sin distinguir mayúsculas). */
   q?: string;
@@ -194,6 +194,9 @@ export interface OpcionesGuardarEnvio {
    * pasa a USADA (con el id del envío) en la MISMA transacción; ANULADA → DomainError("GUIA_ANULADA"); USADA →
    * DomainError("CONFLICTO"). Sin indicarlo (consecutivo automático), un número reservado en un talonario →
    * DomainError("CONFLICTO"). La comprobación se hace bajo el mismo bloqueo que la reserva de talonarios.
+   *
+   * v21: sin indicarlo (consecutivo automático), al crear el envío el contador del consecutivo pasa a su número
+   * (si es mayor; nunca retrocede), en la misma transacción.
    */
   numeroGuiaIndicado?: boolean;
 }
@@ -205,7 +208,8 @@ export interface EstadisticaIntegracion {
 
 export interface EnvioRepository {
   /**
-   * Referencia externa repetida en la misma integración → DomainError("CONFLICTO").
+   * Referencia externa repetida en la misma integración → DomainError("CONFLICTO"). v21: guía física repetida (también
+   * en una carrera, por la restricción de unicidad) → DomainError("CONFLICTO").
    */
   guardar(envio: Envio, opciones?: OpcionesGuardarEnvio): Promise<void>;
   /** Envío de una integración por su número de pedido. */
@@ -214,10 +218,16 @@ export interface EnvioRepository {
   estadisticasPorIntegracion(): Promise<Map<string, EstadisticaIntegracion>>;
   buscarPorId(id: string): Promise<Envio | null>;
   buscarPorNumeroGuia(numeroGuia: number): Promise<Envio | null>;
+  /** v21: envío cuya guía física antigua es ese número. */
+  buscarPorGuiaFisica(guiaFisica: number): Promise<Envio | null>;
   existeNumeroGuia(numeroGuia: number): Promise<boolean>;
   /** ¿Algún envío (de cualquier estado) lleva ítems de este tipo de carga? */
   usaTipoCarga(codigo: TipoCargaCodigo): Promise<boolean>;
-  /** v20: máximo entre los números de envíos y los reservados en talonarios, + 1 (1 si no hay ninguno). */
+  /**
+   * v21: siguiente consecutivo = el menor número mayor que el contador que no está ocupado por ningún envío ni
+   * talonario (1 si no hay ninguno). Solo lo calcula: el contador avanza al guardar el envío (ver
+   * OpcionesGuardarEnvio.numeroGuiaIndicado).
+   */
   siguienteNumeroGuia(): Promise<number>;
   /** Todos los que cumplen el filtro, más recientes primero (para agregados como el dashboard). */
   listar(filtro?: FiltroEnvios): Promise<Envio[]>;
@@ -280,11 +290,12 @@ export interface DatosPersonalesRepository {
 /** Talonarios de guías en blanco (v20). */
 export interface TalonarioRepository {
   /**
-   * Reserva atómica: bajo el mismo bloqueo que el alta de envíos calcula el siguiente consecutivo (máximo entre envíos
-   * y talonarios + 1), llama a `fabricar` con él (puede lanzar) y guarda el talonario con sus guías. Dos reservas
-   * simultáneas (o una reserva y un envío con consecutivo automático) nunca comparten números.
+   * Reserva atómica: bajo el mismo bloqueo que el alta de envíos busca el primer bloque contiguo de `cantidad` números
+   * libres (ni envíos ni talonarios) después del contador del consecutivo (v21), llama a `fabricar` con su inicio
+   * (puede lanzar), guarda el talonario con sus guías y el contador pasa al final del bloque. Dos reservas simultáneas
+   * (o una reserva y un envío con consecutivo automático) nunca comparten números.
    */
-  reservar(fabricar: (desde: number) => Talonario): Promise<Talonario>;
+  reservar(cantidad: number, fabricar: (desde: number) => Talonario): Promise<Talonario>;
   /** Más recientes primero (orden estable por id). `abiertos`: con al menos una guía DISPONIBLE. */
   listar(filtro: { abiertos?: boolean }, paginacion: Paginacion): Promise<{ talonarios: Talonario[]; total: number }>;
   buscarPorId(id: string): Promise<Talonario | null>;

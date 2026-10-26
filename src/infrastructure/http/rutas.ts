@@ -263,6 +263,11 @@ export function crearRouter(c: CasosDeUso, opciones: OpcionesRouter = {}): Route
     res.status(201).json(await c.crearEnvio.ejecutar(actorDe(res), crearEnvioSchema.parse(req.body)));
   });
 
+  // v21: búsqueda rápida por número de guía o guía física (ruta fija antes de /envios/:id).
+  panel.get("/envios/buscar-guia/:numero", async (req, res) => {
+    res.json(await c.buscarEnviosPorGuia.ejecutar(req.params.numero));
+  });
+
   // v12: asignación atómica de repartidor (ruta fija antes de /envios/:id).
   panel.post("/envios/asignar", async (req, res) => {
     res.json(await c.asignarRepartidor.ejecutar(asignarRepartidorSchema.parse(req.body)));

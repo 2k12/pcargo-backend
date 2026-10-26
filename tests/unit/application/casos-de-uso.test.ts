@@ -93,13 +93,16 @@ describe("Cotizar y crear envío", () => {
     ]);
   });
 
-  it("usa el número de la guía física (con o sin ceros) y si no hay, asigna el consecutivo", async () => {
-    const fisica = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "0040425" }));
-    expect(fisica.numeroGuia).toBe(40425);
+  it("usa el número indicado (con o sin ceros) y si no hay, asigna el consecutivo corto (v21: arranca en 1)", async () => {
+    const indicada = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "0040425" }));
+    expect(indicada.numeroGuia).toBe(40425);
     await expect(c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "40425" }))).rejects.toMatchObject({ code: "CONFLICTO" });
     await expect(c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "PC-12" }))).rejects.toMatchObject({ code: "VALIDACION" });
-    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "  " }))).numeroGuia).toBe(40426);
-    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio())).numeroGuia).toBe(40427);
+    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "  " }))).numeroGuia).toBe(1);
+    // un número indicado no mueve el contador; el consecutivo salta los ocupados
+    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ numeroGuia: "3" }))).numeroGuia).toBe(3);
+    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio())).numeroGuia).toBe(2);
+    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio())).numeroGuia).toBe(4);
   });
 
   it("no permite enviar por una ruta inactiva", async () => {
@@ -110,6 +113,42 @@ describe("Cotizar y crear envío", () => {
   it("rechaza tipo de carga desconocido y ruta inexistente", async () => {
     await expect(c.cotizar.ejecutar({ rutaId: 11, ...item("PIANO", 1) })).rejects.toMatchObject({ code: "VALIDACION" });
     await expect(c.cotizar.ejecutar({ rutaId: 999, ...item("SOBRE", 0.1) })).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
+  });
+});
+
+describe("Guía física (v21)", () => {
+  it("se guarda normalizada; repetida → CONFLICTO sin dar de alta nada; puede coincidir con el numeroGuia de otro", async () => {
+    const a = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
+    expect([a.numeroGuia, a.guiaFisica]).toEqual([1, null]);
+    const b = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guiaFisica: "0001" }));
+    expect([b.numeroGuia, b.guiaFisica]).toEqual([2, 1]);
+    await expect(c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guiaFisica: 1 }))).rejects.toMatchObject({
+      code: "CONFLICTO",
+      message: expect.stringMatching(/guía física 1/),
+    });
+    await expect(c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guiaFisica: "x1" }))).rejects.toMatchObject({ code: "VALIDACION" });
+    expect((await c.listarEnvios.ejecutar({}, { porPagina: 100 })).total).toBe(2);
+    // el consecutivo no se consumió con el intento fallido
+    expect((await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio())).numeroGuia).toBe(3);
+  });
+
+  it("buscar-guia: por numeroGuia primero y luego por guía física; ?q= con dígitos encuentra ambos", async () => {
+    const a = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio());
+    const b = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guiaFisica: a.numeroGuia }));
+    const soloFisica = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guiaFisica: 40425 }));
+    expect((await c.buscarEnviosPorGuia.ejecutar(`00${a.numeroGuia}`)).map((e) => e.id)).toEqual([a.id, b.id]);
+    expect((await c.buscarEnviosPorGuia.ejecutar("040425")).map((e) => e.id)).toEqual([soloFisica.id]);
+    expect(await c.buscarEnviosPorGuia.ejecutar("999")).toEqual([]);
+    await expect(c.buscarEnviosPorGuia.ejecutar("4-1")).rejects.toMatchObject({ code: "VALIDACION" });
+    const q = await c.listarEnvios.ejecutar({ q: `0${a.numeroGuia}` }, {});
+    expect(q.datos.map((e) => e.id).sort()).toEqual([a.id, b.id].sort());
+  });
+
+  it("seguimiento público: si no hay envío con ese numeroGuia, busca por guía física", async () => {
+    const e = await c.crearEnvio.ejecutar(OPERADOR, solicitudEnvio({ guiaFisica: 40425 }));
+    expect((await c.seguimiento.ejecutar("0040425")).numeroGuia).toBe(e.numeroGuia);
+    expect((await c.seguimiento.ejecutar(String(e.numeroGuia))).numeroGuia).toBe(e.numeroGuia);
+    await expect(c.seguimiento.ejecutar("40426")).rejects.toMatchObject({ code: "NO_ENCONTRADO" });
   });
 });
 

@@ -25,6 +25,7 @@ import { InMemoryDatosPersonalesRepository } from "../../../src/infrastructure/p
 import { PgCajaRepository } from "../../../src/infrastructure/persistence/postgres/PgCaja.js";
 import { PgDatosPersonalesRepository } from "../../../src/infrastructure/persistence/postgres/PgDatosPersonales.js";
 import { InMemoryTalonarioRepository } from "../../../src/infrastructure/persistence/memory/InMemoryTalonarios.js";
+import { SecuenciaGuiasMemoria } from "../../../src/infrastructure/persistence/memory/SecuenciaGuias.js";
 import { PgTalonarioRepository } from "../../../src/infrastructure/persistence/postgres/PgTalonarios.js";
 import { Talonario } from "../../../src/domain/talonario/Talonario.js";
 import { Envio } from "../../../src/domain/envio/Envio.js";
@@ -57,8 +58,10 @@ contratoRepositorios("memoria", async () => {
     USUARIOS_SEED.map(({ password, ...u }) => ({ ...u, clienteId: null, passwordHash: `hash:${password}`, activo: true })),
   );
   const caja = new InMemoryCajaRepository(usuarios.nombre);
-  const talonarios = new InMemoryTalonarioRepository(() => envios.maximoNumeroGuia());
+  const secuencia = new SecuenciaGuiasMemoria();
+  const talonarios = new InMemoryTalonarioRepository(secuencia);
   const envios = new InMemoryEnvioRepository({
+    secuencia,
     outbox: entregasWebhook,
     nombreIntegracion: integraciones.nombre,
     caja,
@@ -110,6 +113,8 @@ describe.skipIf(!url)("PostgreSQL", () => {
       `TRUNCATE envios, envio_items, historial_estados, integraciones, api_keys, api_idempotencia, api_solicitudes,
          webhook_entregas, cobros, cierres_caja, solicitudes_datos, configuracion, talonarios, talonario_guias CASCADE`,
     );
+    // v21: el consecutivo arranca de nuevo (como un repositorio en memoria recién creado).
+    await db.query("UPDATE secuencia_guias SET ultimo = 0");
     await db.query("DELETE FROM usuarios WHERE NOT (id = ANY($1::uuid[]))", [USUARIOS_SEED.map((u) => u.id)]);
     await db.query("DELETE FROM clientes");
     await db.query("DELETE FROM rutas WHERE origen_id > 4 OR destino_id > 4");
@@ -386,10 +391,22 @@ describe.skipIf(!url)("Migración 015 (fecha de la guía) sobre datos v17", () =
     expect(guias).toEqual([3, 2]);
   });
 
+  it("migración 018 sobre datos existentes: los envíos quedan sin guía física y el consecutivo salta los ocupados", async () => {
+    const repo = new PgEnvioRepository(db);
+    expect((await db.query("SELECT id, ultimo FROM secuencia_guias")).rows).toEqual([{ id: 1, ultimo: "0" }]);
+    const envios = await repo.listar();
+    expect(envios.map((e) => [e.numeroGuia, e.guiaFisica])).toEqual([
+      [3, null],
+      [2, null],
+      [1, null],
+    ]);
+    expect(await repo.siguienteNumeroGuia()).toBe(4);
+  });
+
   it("migración 017: si falla el alta del envío la guía del talonario sigue DISPONIBLE; restricciones de las guías", async () => {
     await db.query("TRUNCATE envios, envio_items, historial_estados, talonarios, talonario_guias CASCADE");
     const talonarios = new PgTalonarioRepository(db);
-    const t = await talonarios.reservar((desde) =>
+    const t = await talonarios.reservar(2, (desde) =>
       Talonario.crear({ cantidad: 2 }, { id: "00000000-0000-4000-c800-000000000001", desde, ahora: new Date(), creadoPor: "Operador" }),
     );
     // ruta inexistente: el INSERT del envío falla (FK) después de tomar el bloqueo y validar la guía → ROLLBACK
@@ -419,5 +436,38 @@ describe.skipIf(!url)("Migración 015 (fecha de la guía) sobre datos v17", () =
     await expect(
       db.query("INSERT INTO talonarios (id, desde, hasta, creado_en) VALUES ($1, 1, 51, now())", ["00000000-0000-4000-c800-000000000004"]),
     ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("migración 018: guia_fisica opcional, en rango y única (varios NULL); secuencia_guias de una sola fila", async () => {
+    await db.query("TRUNCATE envios, envio_items, historial_estados, talonarios, talonario_guias CASCADE");
+    await db.query("UPDATE secuencia_guias SET ultimo = 0");
+    const repo = new PgEnvioRepository(db);
+    const crear = (id: string, numeroGuia: number, guiaFisica: number | null) =>
+      Envio.crear(
+        {
+          ...solicitudEnvio({ rutaId: 1 }),
+          formaPago: "CONTRATO",
+          guiaFisica,
+          items: [{ tipoCarga: "SOBRE", cantidad: 1, pesoKg: 0.2, costoUnitario: 3, subtotal: 3 }],
+        } as Parameters<typeof Envio.crear>[0],
+        { id, numeroGuia, ahora: new Date(), actor: null },
+      );
+    await repo.guardar(crear("00000000-0000-4000-c900-000000000001", 1, null));
+    await repo.guardar(crear("00000000-0000-4000-c900-000000000002", 2, null));
+    await repo.guardar(crear("00000000-0000-4000-c900-000000000003", 3, 999999999999));
+    expect((await db.query("SELECT ultimo FROM secuencia_guias")).rows).toEqual([{ ultimo: "3" }]);
+    await expect(db.query("UPDATE envios SET guia_fisica = 1000000000000 WHERE numero_guia = 1")).rejects.toMatchObject({ code: "23514" });
+    await expect(db.query("UPDATE envios SET guia_fisica = 0 WHERE numero_guia = 1")).rejects.toMatchObject({ code: "23514" });
+    await expect(db.query("UPDATE envios SET guia_fisica = 999999999999 WHERE numero_guia = 1")).rejects.toMatchObject({
+      code: "23505",
+      constraint: "envios_guia_fisica_key",
+    });
+    await expect(db.query("INSERT INTO secuencia_guias (id, ultimo) VALUES (2, 0)")).rejects.toMatchObject({ code: "23514" });
+    await expect(db.query("UPDATE secuencia_guias SET ultimo = -1")).rejects.toMatchObject({ code: "23514" });
+    // sin la fila (no debería pasar) el consecutivo parte de 0 y la recrea al guardar
+    await db.query("DELETE FROM secuencia_guias");
+    expect(await repo.siguienteNumeroGuia()).toBe(4);
+    await repo.guardar(crear("00000000-0000-4000-c900-000000000004", 4, null));
+    expect((await db.query("SELECT id, ultimo FROM secuencia_guias")).rows).toEqual([{ id: 1, ultimo: "4" }]);
   });
 });

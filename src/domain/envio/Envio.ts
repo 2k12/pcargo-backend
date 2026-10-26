@@ -15,6 +15,7 @@ import {
 } from "./EstadoEnvio.js";
 import { normalizarRecibidoPor, type EvidenciaEntrega, type FotoEvidencia } from "./Evidencia.js";
 import type { FormaPago } from "./FormaPago.js";
+import { parsearGuiaFisica } from "./NumeroGuia.js";
 
 export interface Contacto {
   nombre: string;
@@ -60,8 +61,10 @@ export interface GestionEntrega extends Gestion {
 
 export interface EnvioProps {
   id: string;
-  /** Número de la guía física (único). */
+  /** Número de guía del sistema (único): consecutivo automático o de un talonario. */
   numeroGuia: number;
+  /** v21: número de la guía física antigua (preimpresa), si la tuvo; único entre envíos. */
+  guiaFisica?: number | null;
   /** Cliente frecuente que envía (y normalmente paga); null si es ocasional. */
   clienteId?: string | null;
   remitente: { nombre: string; telefono: string; direccion: string | null };
@@ -123,6 +126,8 @@ export interface NuevoEnvio {
   costoAdicional?: number;
   /** v18: fecha de la guía `AAAA-MM-DD` (Ecuador), hoy..hoy+90. Vacía → hoy. */
   fechaGuia?: string | null;
+  /** v21: número de la guía física antigua (solo panel). Vacío → null. */
+  guiaFisica?: string | number | null;
 }
 
 /** Días hacia adelante que se admiten como fecha de la guía (v18), contados desde hoy en Ecuador. */
@@ -228,11 +233,13 @@ export class Envio {
       throw new DomainError("VALIDACION", "La referencia externa solo aplica a envíos ingresados por API");
     }
     const costoAdicional = validarCostoAdicional(datos.costoAdicional);
+    const guiaFisica = parsearGuiaFisica(datos.guiaFisica);
     const fechaGuia = validarFechaGuia(datos.fechaGuia, fechaLocalEC(ctx.ahora), ctx.fechaGuiaMinima);
     const usuario = ctx.actor ? { id: ctx.actor.id, nombre: ctx.actor.nombre } : null;
     return new Envio({
       id: ctx.id,
       numeroGuia: ctx.numeroGuia,
+      guiaFisica,
       clienteId: datos.clienteId ?? null,
       remitente: {
         nombre: datos.remitente.nombre.trim(),
@@ -276,6 +283,7 @@ export class Envio {
   ): Envio {
     return new Envio({
       ...props,
+      guiaFisica: props.guiaFisica ?? null,
       costoAdicional: props.costoAdicional ?? 0,
       fechaGuia: props.fechaGuia || fechaLocalEC(props.creadoEn),
       remitente: { ...props.remitente, direccion: props.remitente.direccion ?? null },
@@ -435,6 +443,10 @@ export class Envio {
   }
   get numeroGuia(): number {
     return this.props.numeroGuia;
+  }
+  /** v21: número de la guía física antigua, o null. */
+  get guiaFisica(): number | null {
+    return this.props.guiaFisica ?? null;
   }
   get estado(): EstadoEnvio {
     return this.props.estado;

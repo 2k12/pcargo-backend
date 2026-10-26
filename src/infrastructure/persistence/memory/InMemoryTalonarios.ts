@@ -1,21 +1,23 @@
 import type { Paginacion, TalonarioRepository } from "../../../application/ports/repositories.js";
 import { DomainError } from "../../../domain/shared/DomainError.js";
 import { exigirGuiaDisponible, Talonario, type TalonarioProps } from "../../../domain/talonario/Talonario.js";
+import { SecuenciaGuiasMemoria } from "./SecuenciaGuias.js";
 
 /**
  * Talonarios en memoria (v20). El repositorio de envíos llama a `validarUso`/`marcarUsada` al guardar un envío nuevo
- * (como la transacción de Postgres) y a `maximoNumero` para el consecutivo. Sin `await` entre lecturas y escrituras:
+ * (como la transacción de Postgres). El consecutivo (v21) es compartido con los envíos (`SecuenciaGuiasMemoria`). Sin `await` entre lecturas y escrituras:
  * cada operación es atómica en el bucle de eventos.
  */
 export class InMemoryTalonarioRepository implements TalonarioRepository {
   private readonly datos: TalonarioProps[] = [];
 
-  /** `maximoEnvios`: mayor número de guía de los envíos guardados (0 si no hay). */
-  constructor(private readonly maximoEnvios: () => number = () => 0) {}
+  /** `secuencia`: consecutivo compartido con el repositorio de envíos (v21). */
+  constructor(private readonly secuencia: SecuenciaGuiasMemoria = new SecuenciaGuiasMemoria()) {
+    secuencia.agregarFuente(() => this.numerosReservados());
+  }
 
-  /** Mayor número reservado en talonarios (0 si no hay). */
-  maximoNumero(): number {
-    return Math.max(0, ...this.datos.map((t) => t.hasta));
+  private *numerosReservados(): Iterable<number> {
+    for (const t of this.datos) for (const g of t.guias) yield g.numeroGuia;
   }
 
   private buscar(numeroGuia: number): TalonarioProps | undefined {
@@ -40,10 +42,11 @@ export class InMemoryTalonarioRepository implements TalonarioRepository {
     return Talonario.reconstruir(structuredClone(t));
   }
 
-  async reservar(fabricar: (desde: number) => Talonario): Promise<Talonario> {
-    const desde = Math.max(this.maximoEnvios(), this.maximoNumero()) + 1;
+  async reservar(cantidad: number, fabricar: (desde: number) => Talonario): Promise<Talonario> {
+    const desde = this.secuencia.primerBloqueLibre(cantidad);
     const t = fabricar(desde);
     this.datos.push(structuredClone(t.toSnapshot()));
+    this.secuencia.avanzar(t.hasta);
     return this.leer(t.toSnapshot());
   }
 

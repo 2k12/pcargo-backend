@@ -106,6 +106,7 @@ import {
 import { ObtenerCatalogoPublico } from "../application/use-cases/catalogo/CatalogoPublico.js";
 import { ObtenerResumen } from "../application/use-cases/dashboard/ObtenerResumen.js";
 import {
+  BuscarEnviosPorGuia,
   CambiarEstadoEnvio,
   ConsultarSeguimiento,
   ListarEnvios,
@@ -175,6 +176,7 @@ import { InMemoryClienteRepository } from "./persistence/memory/InMemoryClienteR
 import { InMemoryCajaRepository } from "./persistence/memory/InMemoryCaja.js";
 import { InMemoryDatosPersonalesRepository } from "./persistence/memory/InMemoryDatosPersonales.js";
 import { InMemoryTalonarioRepository } from "./persistence/memory/InMemoryTalonarios.js";
+import { SecuenciaGuiasMemoria } from "./persistence/memory/SecuenciaGuias.js";
 import { PgCajaRepository } from "./persistence/postgres/PgCaja.js";
 import { PgTalonarioRepository } from "./persistence/postgres/PgTalonarios.js";
 import { PgDatosPersonalesRepository } from "./persistence/postgres/PgDatosPersonales.js";
@@ -384,6 +386,8 @@ export function crearCasosDeUso(a: Adaptadores, cache: Cache = new SinCache(), o
     eliminarCliente: invalidaTras(new EliminarCliente(a.clientes), cache, [ESPACIOS.dashboard]),
     listarEnvios: new ListarEnvios(a.envios, rutas),
     obtenerEnvio: new ObtenerEnvio(a.envios, rutas),
+    // v21: búsqueda rápida por número de guía o guía física (sin caché: el panel necesita lo vigente).
+    buscarEnviosPorGuia: new BuscarEnviosPorGuia(a.envios, rutas),
     cambiarEstado: invalidaTras(cambiarEstadoBase, cache, [ESPACIOS.dashboard, ESPACIOS.seguimiento]),
     // La evidencia no aparece en el seguimiento público ni en el dashboard: no invalida cachés.
     subirEvidencia: subirEvidenciaBase,
@@ -509,9 +513,12 @@ export async function adaptadoresEnMemoria(
   });
   // Caja: el repo de envíos registra los cobros al guardar (como la transacción de Postgres).
   const caja = new InMemoryCajaRepository(usuarios.nombre);
-  // Talonarios (v20): comparten el consecutivo con los envíos y la guía pasa a USADA al guardar el envío.
-  const talonarios = new InMemoryTalonarioRepository(() => envios.maximoNumeroGuia());
+  // Talonarios (v20): comparten el consecutivo con los envíos (v21: contador propio) y la guía pasa a USADA al
+  // guardar el envío.
+  const secuenciaGuias = new SecuenciaGuiasMemoria();
+  const talonarios = new InMemoryTalonarioRepository(secuenciaGuias);
   const envios = new InMemoryEnvioRepository({
+    secuencia: secuenciaGuias,
     outbox: entregasWebhook,
     nombreIntegracion: integraciones.nombre,
     caja,

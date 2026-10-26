@@ -25,6 +25,7 @@ import type { CambiosPerfil, Usuario, UsuarioAdmin, UsuarioConCredenciales } fro
 import type { MovimientosCaja } from "../../../domain/caja/Caja.js";
 import { digitosTelefono } from "../../../domain/cliente/Cliente.js";
 import { esFinal } from "../../../domain/envio/EstadoEnvio.js";
+import { SecuenciaGuiasMemoria } from "./SecuenciaGuias.js";
 import { ARTICULOS_SEED, CIUDADES, RUTAS_SEED, TIPOS_CARGA_SEED } from "../seed-data.js";
 
 // Adaptadores en memoria: usados en tests y en `DB_DRIVER=memory` (demo sin Postgres).
@@ -416,18 +417,23 @@ export interface OpcionesEnvioMemoria {
   caja?: { validar(m: MovimientosCaja): void; aplicar(m: MovimientosCaja): void };
   /** Nombre actual de un usuario (repartidor asignado). */
   nombreUsuario?: (id: string) => string | null;
-  /** v20: talonarios de guías en blanco (consecutivo y uso de la guía en la misma «transacción» que el envío). */
+  /** v20: talonarios de guías en blanco (uso de la guía en la misma «transacción» que el envío). */
   talonarios?: {
-    maximoNumero(): number;
     validarUso(numeroGuia: number, indicado: boolean): void;
     marcarUsada(numeroGuia: number, envioId: string, fecha: Date): void;
   };
+  /** v21: consecutivo de números de guía (compartido con los talonarios). Sin indicarlo, uno propio. */
+  secuencia?: SecuenciaGuiasMemoria;
 }
 
 export class InMemoryEnvioRepository implements EnvioRepository {
   private readonly datos = new Map<string, EnvioProps>();
+  private readonly secuencia: SecuenciaGuiasMemoria;
 
-  constructor(private readonly opciones: OpcionesEnvioMemoria = {}) {}
+  constructor(private readonly opciones: OpcionesEnvioMemoria = {}) {
+    this.secuencia = opciones.secuencia ?? new SecuenciaGuiasMemoria();
+    this.secuencia.agregarFuente(() => [...this.datos.values()].map((x) => x.numeroGuia));
+  }
 
   async guardar(envio: Envio, opciones: OpcionesGuardarEnvio = {}): Promise<void> {
     const s = envio.toSnapshot();
@@ -439,6 +445,9 @@ export class InMemoryEnvioRepository implements EnvioRepository {
       if ([...this.datos.values()].some((x) => x.numeroGuia === s.numeroGuia)) {
         throw new DomainError("CONFLICTO", `La guía ${s.numeroGuia} ya está registrada`);
       }
+      if (s.guiaFisica != null && [...this.datos.values()].some((x) => x.guiaFisica === s.guiaFisica)) {
+        throw new DomainError("CONFLICTO", `La guía física ${s.guiaFisica} ya está registrada`);
+      }
       this.opciones.talonarios?.validarUso(s.numeroGuia, opciones.numeroGuiaIndicado ?? false);
     } else {
       // Como en Postgres: el origen y la referencia no cambian después de crear el envío; la asignación del
@@ -448,6 +457,7 @@ export class InMemoryEnvioRepository implements EnvioRepository {
       s.referenciaExterna = previo.referenciaExterna ?? null;
       s.repartidor = previo.repartidor ?? null;
       s.asignadoEn = previo.asignadoEn ?? null;
+      s.guiaFisica = previo.guiaFisica ?? null;
       if (previo.anonimizadoEn || !s.anonimizadoEn) {
         s.anonimizadoEn = previo.anonimizadoEn ?? null;
         s.remitente = previo.remitente;
@@ -462,6 +472,8 @@ export class InMemoryEnvioRepository implements EnvioRepository {
     if (!this.datos.has(s.id) && opciones.numeroGuiaIndicado) {
       this.opciones.talonarios?.marcarUsada(s.numeroGuia, s.id, s.creadoEn);
     }
+    // v21: un consecutivo automático avanza el contador (nunca retrocede).
+    if (!this.datos.has(s.id) && !opciones.numeroGuiaIndicado) this.secuencia.avanzar(s.numeroGuia);
     this.datos.set(envio.id, structuredClone({ ...s, integracionNombre: null }));
   }
 
@@ -503,6 +515,11 @@ export class InMemoryEnvioRepository implements EnvioRepository {
     return p ? this.leer(p) : null;
   }
 
+  async buscarPorGuiaFisica(guiaFisica: number): Promise<Envio | null> {
+    const p = [...this.datos.values()].find((x) => x.guiaFisica === guiaFisica);
+    return p ? this.leer(p) : null;
+  }
+
   async buscarPorReferencia(integracionId: string, referenciaExterna: string): Promise<Envio | null> {
     const p = [...this.datos.values()].find(
       (x) => x.integracionId === integracionId && x.referenciaExterna === referenciaExterna,
@@ -530,13 +547,8 @@ export class InMemoryEnvioRepository implements EnvioRepository {
     return [...this.datos.values()].some((x) => x.items.some((i) => i.tipoCarga === codigo));
   }
 
-  /** Mayor número de guía de los envíos guardados (0 si no hay). */
-  maximoNumeroGuia(): number {
-    return Math.max(0, ...[...this.datos.values()].map((x) => x.numeroGuia));
-  }
-
   async siguienteNumeroGuia(): Promise<number> {
-    return Math.max(this.maximoNumeroGuia(), this.opciones.talonarios?.maximoNumero() ?? 0) + 1;
+    return this.secuencia.primerBloqueLibre(1);
   }
 
   async listar(filtro: FiltroEnvios = {}): Promise<Envio[]> {
@@ -578,7 +590,7 @@ export class InMemoryEnvioRepository implements EnvioRepository {
       .filter(
         (p) =>
           !q ||
-          p.numeroGuia === filtro.numeroGuia ||
+          (filtro.numeroGuia !== undefined && (p.numeroGuia === filtro.numeroGuia || p.guiaFisica === filtro.numeroGuia)) ||
           [p.remitente.nombre, p.destinatario.nombre, p.referenciaExterna ?? ""].some((v) => v.toLowerCase().includes(q)),
       )
       .sort((a, b) => b.creadoEn.getTime() - a.creadoEn.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
